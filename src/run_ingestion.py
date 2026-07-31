@@ -80,6 +80,17 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--verbose", action="store_true", help="Logging en nivel DEBUG"
     )
+    parser.add_argument(
+        "--debug-log",
+        nargs="?",
+        const="logs/rechazos_debug.txt",
+        default=None,
+        help=(
+            "Escribe en un .txt el detalle de los chunks rechazados (regla de "
+            "negocio, motivo y texto cuando un documento rechaza la mayoría). "
+            "Sin valor usa logs/rechazos_debug.txt"
+        ),
+    )
     return parser
 
 
@@ -101,6 +112,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             extensiones=args.extensiones, limite=args.limite, por_defecto=1
         )
         resumen.log_resumen()
+        if args.debug_log:
+            resumen.escribir_log_rechazos(Path(args.debug_log))
         if resumen.total == 0:
             return 1
         return 0 if resumen.error == 0 else 2

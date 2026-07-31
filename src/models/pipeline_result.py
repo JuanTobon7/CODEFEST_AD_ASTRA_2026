@@ -4,7 +4,7 @@ Resultado de la ingesta de un archivo, con conteos y advertencias.
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -37,3 +37,7 @@ class IngestionResult(BaseModel):
     errores: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
     tiempo_seg: float = Field(default=0.0)
+    rechazos_detalle: List[Dict] = Field(
+        default_factory=list,
+        description="Detalle de cada rechazo: regla, motivo y texto (modo debug)",
+    )

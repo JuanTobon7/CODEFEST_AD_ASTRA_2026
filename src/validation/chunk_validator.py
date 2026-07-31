@@ -48,6 +48,7 @@ class ValidationResult:
     validos: List[Chunk] = field(default_factory=list)
     rechazados: List[Chunk] = field(default_factory=list)
     motivos: List[str] = field(default_factory=list)
+    rechazos_detalle: List[dict] = field(default_factory=list)
 
 
 class ChunkValidator:
@@ -72,27 +73,40 @@ class ChunkValidator:
             if doc_id_actual != chunk.doc_id:
                 doc_id_actual = chunk.doc_id
                 posicion_esperada = 0
-            motivo = self._validar_duro(chunk)
+            regla, motivo = self._validar_duro(chunk)
             if motivo is None:
                 # Integridad de posiciones y unicidad de chunk_id por documento.
                 if chunk.posicion != posicion_esperada:
-                    motivo = (
+                    regla, motivo = (
+                        "posicion",
                         f"posicion {chunk.posicion} fuera de secuencia "
-                        f"(se esperaba {posicion_esperada})"
+                        f"(se esperaba {posicion_esperada})",
                     )
                 elif chunk.chunk_id in vistos:
-                    motivo = f"chunk_id duplicado: {chunk.chunk_id}"
+                    regla, motivo = "duplicado", f"chunk_id duplicado: {chunk.chunk_id}"
 
             if motivo is not None:
                 logger.warning(
-                    "Chunk rechazado | doc=%s pos=%s fuente=%s | %s",
+                    "Chunk rechazado | doc=%s pos=%s fuente=%s | [%s] %s",
                     chunk.doc_id,
                     chunk.posicion,
                     chunk.fuente,
+                    regla,
                     motivo,
                 )
                 resultado.rechazados.append(chunk)
-                resultado.motivos.append(f"[{chunk.chunk_id}] {motivo}")
+                resultado.motivos.append(f"[{regla}] {motivo}")
+                resultado.rechazos_detalle.append(
+                    {
+                        "doc_id": chunk.doc_id,
+                        "chunk_id": chunk.chunk_id,
+                        "posicion": chunk.posicion,
+                        "fuente": chunk.fuente,
+                        "regla": regla,
+                        "motivo": motivo,
+                        "texto": chunk.texto,
+                    }
+                )
                 # Un rechazo por otra regla no debe romper la secuencia de los
                 # fragmentos siguientes válidos: si este era el esperado, se
                 # avanza la posición para evitar rechazos en cascada.
@@ -112,24 +126,30 @@ class ChunkValidator:
 
     # Validaciones duras ----------------------------------------------------------
 
-    def _validar_duro(self, chunk: Chunk) -> str | None:
-        """Devuelve el motivo de rechazo o ``None`` si pasa."""
+    def _validar_duro(self, chunk: Chunk) -> tuple[str, str | None]:
+        """Devuelve ``(regla, motivo)``; ``motivo`` es ``None`` si pasa.
+
+        ``regla`` identifica la regla de negocio incumplida (útil para logs
+        y análisis de rechazos): ``obligatorio``, ``tipo``, ``fenomeno``,
+        ``tokens``, ``posicion`` o ``duplicado``.
+        """
         for campo, tipo in _CAMPOS_OBLIGATORIOS.items():
             valor = getattr(chunk, campo, None)
             if valor is None or (isinstance(valor, str) and not valor.strip()):
-                return f"campo obligatorio ausente: {campo}"
+                return "obligatorio", f"campo obligatorio ausente: {campo}"
             if not isinstance(valor, tipo):
-                return f"campo '{campo}' con tipo incorrecto (esperado {tipo.__name__})"
+                return "tipo", f"campo '{campo}' con tipo incorrecto (esperado {tipo.__name__})"
         if chunk.fenomeno not in (1, 2, 3):
-            return f"fenomeno fuera de rango: {chunk.fenomeno}"
+            return "fenomeno", f"fenomeno fuera de rango: {chunk.fenomeno}"
         if chunk.num_tokens > self.max_tokens:
             return (
+                "tokens",
                 f"num_tokens {chunk.num_tokens} supera el límite del encoder "
-                f"({self.max_tokens})"
+                f"({self.max_tokens})",
             )
         if chunk.posicion < 0:
-            return f"posicion negativa: {chunk.posicion}"
-        return None
+            return "posicion", f"posicion negativa: {chunk.posicion}"
+        return "ok", None
 
     # Validaciones blandas ----------------------------------------------------------
 

@@ -48,7 +48,7 @@ class HybridChunkingStrategy(ChunkingStrategy):
             if not seccion.splittable or self.segmenter.count_tokens(texto) <= config.chunk_size:
                 self._anadir_chunks(extracted_doc, texto, config, chunks, seccion=seccion.titulo)
                 continue
-            chunks.extend(self._dividir_seccion(extracted_doc, seccion, config))
+            self._dividir_seccion(extracted_doc, seccion, config, chunks)
         return chunks
 
     def _anadir_chunks(
@@ -128,24 +128,30 @@ class HybridChunkingStrategy(ChunkingStrategy):
     # Fase 2: ventana deslizante dentro de la sección --------------------------
 
     def _dividir_seccion(
-        self, extracted_doc: ExtractedDocument, seccion: Section, config: ChunkingConfig
-    ) -> List[Chunk]:
-        """Aplica la ventana deslizante semántica al texto de la sección."""
+        self,
+        extracted_doc: ExtractedDocument,
+        seccion: Section,
+        config: ChunkingConfig,
+        chunks: List[Chunk],
+    ) -> None:
+        """Aplica la ventana deslizante semántica al texto de la sección.
+
+        Los chunks se añaden a la lista compartida del documento para que las
+        posiciones sean globales (no reiniciar por sección).
+        """
         oraciones = self.segmenter.split_oraciones(seccion.texto)
         ventanas = self.segmenter.ventanas_deslizantes(
             oraciones, config.chunk_size, config.overlap_size
         )
-        chunks: List[Chunk] = []
         for posicion_local, (ini, fin) in enumerate(ventanas):
             texto_chunk = " ".join(oraciones[ini : fin + 1]).strip()
             overlap_con = None
-            if posicion_local > 0:
+            if posicion_local > 0 and chunks:
                 overlap_con = chunks[-1].chunk_id
             self._anadir_chunks(
                 extracted_doc, texto_chunk, config, chunks,
                 seccion=seccion.titulo, overlap_con=overlap_con,
             )
-        return chunks
 
     # Utilidades ---------------------------------------------------------------
 

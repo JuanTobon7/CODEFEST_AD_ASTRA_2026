@@ -102,6 +102,7 @@ class IngestionPipeline:
             validacion = self.validator.validate(chunks)
             resultado.num_chunks = len(chunks)
             resultado.num_rechazados = len(validacion.rechazados)
+            resultado.rechazos_detalle = validacion.rechazos_detalle
             resultado.warnings = [
                 f"{c.chunk_id}: {w}" for c in validacion.validos for w in c.validation_warnings
             ]

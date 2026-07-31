@@ -51,6 +51,20 @@ class BatchIngestor:
         self._corpus_service = CorpusService(corpus, fenomenos_map or {})
         self._pipeline, self._repository = self._build_pipeline()
 
+    @staticmethod
+    def _doc_id_relativo(filepath: Path, corpus: Path) -> str:
+        """doc_id único y legible: ruta relativa al corpus.
+
+        Usar solo ``filepath.stem`` colisiona cuando dos archivos de carpetas
+        distintas comparten nombre (p. ej. tiles de OSM en ``tiles/*/*/``),
+        lo que mezcla documentos y provoca rechazos en cascada por posiciones.
+        """
+        try:
+            rel = Path(filepath).resolve().relative_to(Path(corpus).resolve())
+            return str(rel)
+        except ValueError:
+            return Path(filepath).stem
+
     def _build_pipeline(self) -> Tuple[IngestionPipeline, MongoChunkRepository]:
         """Ensambla el pipeline con todas sus dependencias (factories)."""
         segmenter = TextSegmenter.crear(
@@ -81,6 +95,9 @@ class BatchIngestor:
             metadata_builder=MetadataBuilder(default_fuente=self._settings.default_fuente),
             validator=ChunkValidator(max_tokens=self._settings.max_tokens),
             repository=repositorio,
+            doc_id_generator=lambda fp, fenomeno: self._doc_id_relativo(
+                fp, self._corpus_service.corpus
+            ),
         )
         return pipeline, repositorio
 
