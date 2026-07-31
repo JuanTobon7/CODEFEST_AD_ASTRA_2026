@@ -20,6 +20,12 @@ logger = logging.getLogger(__name__)
 # Extensiones leídas como texto plano para el pre-análisis de boilerplate.
 _EXTENSIONES_TEXTO = {"md", "markdown", "txt", "html", "htm", "json", "csv"}
 
+# Archivos de sistema/metadatos que nunca son contenido indexable.
+_ARCHIVOS_IGNORADOS = {
+    ".ds_store", "thumbs.db", "desktop.ini", ".gitkeep",
+    ".gitignore", ".gitattributes", ".gitmodules",
+}
+
 
 class CorpusService:
     """Descubre archivos del corpus y asigna el fenómeno (1, 2 o 3)."""
@@ -77,8 +83,21 @@ class CorpusService:
 
     # Escaneo de archivos -------------------------------------------------------
 
+    @staticmethod
+    def _es_archivo_indexable(path: Path) -> bool:
+        """True si el archivo es contenido del corpus (no metadata del sistema)."""
+        nombre = path.name.lower()
+        if nombre in _ARCHIVOS_IGNORADOS:
+            return False
+        if nombre.startswith("._") or nombre.startswith("."):  # AppleDouble/hidden
+            return False
+        return True
+
     def scan(self, extensiones: Optional[List[str]] = None) -> List[Path]:
         """Archivos del corpus (recursivo, orden estable) con filtro opcional.
+
+        Excluye archivos de sistema (.DS_Store, Thumbs.db, ocultos, etc.) que
+        no son contenido indexable.
 
         Args:
             extensiones: Solo estas extensiones (sin punto), p. ej. ``["pdf"]``.
@@ -89,7 +108,9 @@ class CorpusService:
         if not self.corpus.exists() or not self.corpus.is_dir():
             logger.error("El directorio del corpus no existe: %s", self.corpus)
             return []
-        archivos = [p for p in self.corpus.rglob("*") if p.is_file()]
+        archivos = [
+            p for p in self.corpus.rglob("*") if p.is_file() and self._es_archivo_indexable(p)
+        ]
         if extensiones:
             archivos = [
                 p for p in archivos if p.suffix.lower().lstrip(".") in extensiones

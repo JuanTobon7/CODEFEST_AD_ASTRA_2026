@@ -19,11 +19,11 @@ from src.models.extracted_document import ExtractedDocument, Formato, Section
 logger = logging.getLogger(__name__)
 
 
-@register_extractor(".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp")
+@register_extractor(".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".avif")
 class ImageExtractor(BaseExtractor):
     """Realiza OCR sobre imágenes y devuelve el texto como única sección."""
 
-    supported_formats = ["png", "jpg", "jpeg", "gif", "bmp", "tif", "tiff", "webp"]
+    supported_formats = ["png", "jpg", "jpeg", "gif", "bmp", "tif", "tiff", "webp", "avif"]
 
     def __init__(self, ocr_language: Optional[str] = None) -> None:
         """Inicializa el extractor.
@@ -52,6 +52,7 @@ class ImageExtractor(BaseExtractor):
 
     def _ocr(self, filepath: Path) -> str:
         """Intenta pytesseract y cae a easyocr si no está disponible."""
+        # 1) pytesseract: requiere el BINARIO de Tesseract en el sistema.
         try:
             import pytesseract  # type: ignore
             from PIL import Image  # type: ignore
@@ -60,10 +61,17 @@ class ImageExtractor(BaseExtractor):
             texto = pytesseract.image_to_string(Image.open(filepath), lang=idiomas)
             return texto
         except ImportError:
-            pass
+            pass  # pytesseract no instalado: probar easyocr
         except Exception as exc:
+            if type(exc).__name__ == "TesseractNotFoundError":
+                raise ExtractorError(
+                    f"OCR: pytesseract instalado pero falta el binario de Tesseract "
+                    f"(imagen: {filepath.name}). Instálalo, p. ej. "
+                    f"winget install UB-Mannheim.TesseractOCR"
+                ) from exc
             logger.warning("pytesseract falló para %s: %s", filepath.name, exc)
 
+        # 2) easyocr: sin binario externo (pero pesado, requiere torch).
         try:
             import easyocr  # type: ignore
 
@@ -73,7 +81,8 @@ class ImageExtractor(BaseExtractor):
             return "\n".join(str(r) for r in resultados)
         except ImportError as exc:
             raise ExtractorError(
-                f"OCR no disponible: instala pytesseract o easyocr (imagen: {filepath.name})"
+                f"OCR no disponible (imagen: {filepath.name}): instala easyocr "
+                f"o el binario de Tesseract (winget install UB-Mannheim.TesseractOCR)"
             ) from exc
         except Exception as exc:
             raise ExtractorError(f"easyocr falló para {filepath.name}: {exc}") from exc

@@ -103,6 +103,9 @@ class PDFExtractor(BaseExtractor):
             raise ExtractorError(f"Fallo al extraer texto de {filepath.name}: {exc}") from exc
 
         if not any(s.texto.strip() for s in secciones):
+            ocr_doc = self._extract_con_ocr(filepath, doc)
+            if ocr_doc is not None:
+                return ocr_doc
             raise ExtractorError(f"El PDF no contiene texto extraíble: {filepath.name}")
 
         return ExtractedDocument(
@@ -113,6 +116,71 @@ class PDFExtractor(BaseExtractor):
             secciones=secciones,
             titulo_documento=titulo,
         )
+
+    # OCR de PDFs escaneados ----------------------------------------------------
+
+    def _extract_con_ocr(self, filepath: Path, doc) -> Optional[ExtractedDocument]:
+        """OCR página por página de un PDF sin capa de texto (escaneado).
+
+        Requiere el binario de Tesseract en el sistema (pytesseract es solo el
+        envoltorio). Devuelve ``None`` si el OCR no está disponible; en ese
+        caso el llamador mantiene el error de "sin texto extraíble".
+        """
+        try:
+            import pytesseract  # type: ignore
+            from PIL import Image  # type: ignore
+
+            pytesseract.get_tesseract_version()  # lanza si falta el binario
+        except Exception as exc:  # pragma: no cover - entorno sin Tesseract
+            logger.warning(
+                "PDF sin texto y OCR no disponible para %s (%s). "
+                "Instala el binario de Tesseract (winget install UB-Mannheim.TesseractOCR)",
+                filepath.name,
+                exc,
+            )
+            return None
+
+        import io
+
+        logger.info("PDF escaneado; aplicando OCR a %s", filepath.name)
+        secciones: List[Section] = []
+        try:
+            idiomas = self._detectar_idiomas_ocr()
+            for numero_pagina, pagina in enumerate(doc):
+                pix = pagina.get_pixmap(dpi=300)
+                imagen = Image.open(io.BytesIO(pix.tobytes("png")))
+                texto = pytesseract.image_to_string(imagen, lang=idiomas)
+                texto = " ".join(texto.split())
+                if not texto.strip():
+                    continue
+                secciones.append(
+                    Section(texto=texto, orden=len(secciones), splittable=True)
+                )
+        except Exception as exc:
+            raise ExtractorError(f"OCR falló para {filepath.name}: {exc}") from exc
+
+        if not secciones:
+            raise ExtractorError(f"El PDF no contiene texto extraíble: {filepath.name}")
+        return ExtractedDocument(
+            doc_id="",
+            fuente=filepath.name,
+            formato=Formato.PDF,
+            fenomeno=1,
+            secciones=secciones,
+            metadata={"ocr": True, "ocr_language": "auto"},
+        )
+
+    @staticmethod
+    def _detectar_idiomas_ocr() -> str:
+        """Idiomas disponibles de Tesseract (prioridad es/en/pt)."""
+        try:
+            import pytesseract  # type: ignore
+
+            disponibles = set(pytesseract.get_languages(config=""))
+        except Exception:
+            disponibles = set()
+        preferidos = [l for l in ("spa", "eng", "por") if l in disponibles]
+        return "+".join(preferidos) if preferidos else "eng"
 
     # Heurísticas de encabezado ----------------------------------------------
 

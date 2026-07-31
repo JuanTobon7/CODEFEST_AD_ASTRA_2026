@@ -145,18 +145,51 @@ class JSONExtractor(BaseExtractor):
 
     @classmethod
     def _cuerpo_registro(cls, registro: Dict[str, Any]) -> str:
-        """Concatena title + body_paragraphs respetando el orden."""
+        """Concatena el cuerpo del registro (campos planos + secciones anidadas).
+
+        Soporta estructuras como ``{"sections": [{"heading": ..., "paragraphs": [...]}]}``
+        (páginas web) además de los campos planos clásicos (body, abstract, ...).
+        """
         partes: List[str] = []
-        for clave in _CAMPOS_CUERPO:
-            valor = registro.get(clave)
-            if valor is None:
-                continue
-            if isinstance(valor, list):
+        # Claves cuyo valor es contenido indexable (planas o anidadas).
+        claves_contenido = _CAMPOS_CUERPO + (
+            "sections", "paragraphs", "heading", "items",
+        )
+
+        def _agregar(valor: Any) -> None:
+            if isinstance(valor, str) and valor.strip():
+                partes.append(valor.strip())
+            elif isinstance(valor, list):
                 for item in valor:
                     if isinstance(item, str) and item.strip():
                         partes.append(item.strip())
-            elif isinstance(valor, str) and valor.strip():
-                partes.append(valor.strip())
+                    elif isinstance(item, dict):
+                        texto_item = cls._cuerpo_registro(item)
+                        if texto_item:
+                            partes.append(texto_item)
+
+        for clave, valor in registro.items():
+            if clave in _CAMPOS_METADATA or clave in _CAMPOS_TITULO:
+                continue
+            if clave in claves_contenido:
+                _agregar(valor)
+            elif isinstance(valor, dict) and cls._es_registro(valor):
+                _agregar(valor)
+            elif (
+                isinstance(valor, list)
+                and valor
+                and all(isinstance(item, dict) for item in valor)
+                and any(cls._es_registro(item) for item in valor)
+            ):
+                for item in valor:
+                    _agregar(item)
+
+        # Páginas sin cuerpo real (solo menús y enlaces, p. ej. taxonomías):
+        # el texto de los enlaces es el único contenido indexable. Los enlaces
+        # de navegación repetidos entre páginas se eliminan como boilerplate.
+        if not partes and isinstance(registro.get("links"), list):
+            _agregar(registro["links"])
+
         if partes:
             return re.sub(r"\n{3,}", "\n\n", "\n".join(partes))
         # Si no hay campos de cuerpo conocidos, indexar pares clave: valor
