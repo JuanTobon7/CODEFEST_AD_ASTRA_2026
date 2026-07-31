@@ -69,8 +69,14 @@ class PDFExtractor(BaseExtractor):
                     if bloque.get("type") != 0:  # 0 = texto; imágenes se ignoran aquí
                         continue
                     tamano_max, en_negrita = self._estilo_bloque(bloque)
-                    lineas = [(_limpiar_linea(s["text"]) or "") for s in bloque.get("lines", [])]
-                    texto_bloque = " ".join(l for l in lineas if l)
+                    # El texto vive en los "spans" de cada línea, no en la línea.
+                    lineas: List[str] = []
+                    for linea in bloque.get("lines", []):
+                        for span in linea.get("spans", []):
+                            texto_span = _limpiar_linea(span.get("text", ""))
+                            if texto_span:
+                                lineas.append(texto_span)
+                    texto_bloque = " ".join(lineas)
                     if not texto_bloque:
                         continue
                     if encabezado is None and self._es_encabezado(tamano_max, en_negrita, texto_bloque):

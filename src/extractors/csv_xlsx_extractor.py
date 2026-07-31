@@ -79,13 +79,36 @@ class CSVExtractor(_BaseTabularExtractor):
         except ImportError:
             return self._extract_csv_std(filepath)
 
-        try:
-            df = pd.read_csv(filepath, encoding_errors="replace", keep_default_na=False)
-        except Exception as exc:
-            raise ExtractorError(f"CSV ilegible ({filepath.name}): {exc}") from exc
+        df = self._leer_csv(pd, filepath)
         columnas = _normalizar_columnas(df.columns.tolist())
         filas = df.values.tolist()
         return self._construir_documento(filepath, columnas, filas, Formato.CSV)
+
+    @staticmethod
+    def _leer_csv(pd, filepath: Path):
+        """Lee el CSV tolerando filas malformadas y codificaciones raras."""
+        try:
+            return pd.read_csv(
+                filepath,
+                encoding="utf-8",
+                encoding_errors="replace",
+                keep_default_na=False,
+                on_bad_lines="skip",
+            )
+        except Exception:
+            # Reintento con el motor de Python: tolerante a filas irregulares.
+            try:
+                return pd.read_csv(
+                    filepath,
+                    engine="python",
+                    encoding="utf-8",
+                    encoding_errors="replace",
+                    keep_default_na=False,
+                    on_bad_lines="skip",
+                    sep=None,
+                )
+            except Exception as exc:
+                raise ExtractorError(f"CSV ilegible ({filepath.name}): {exc}") from exc
 
     def _extract_csv_std(self, filepath: Path) -> ExtractedDocument:
         """Respaldo con el módulo csv cuando no hay pandas."""

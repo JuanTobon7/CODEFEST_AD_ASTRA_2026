@@ -46,14 +46,41 @@ class HybridChunkingStrategy(ChunkingStrategy):
             if not texto:
                 continue
             if not seccion.splittable or self.segmenter.count_tokens(texto) <= config.chunk_size:
+                self._anadir_chunks(extracted_doc, texto, config, chunks, seccion=seccion.titulo)
+                continue
+            chunks.extend(self._dividir_seccion(extracted_doc, seccion, config))
+        return chunks
+
+    def _anadir_chunks(
+        self,
+        extracted_doc: ExtractedDocument,
+        texto: str,
+        config: ChunkingConfig,
+        chunks: List[Chunk],
+        seccion: str | None = None,
+        overlap_con: str | None = None,
+    ) -> None:
+        """Añade ``texto`` como un chunk, o varios si supera ``max_tokens``.
+
+        Unidad atómica u oración única más larga que el límite del encoder:
+        se parte por tokens (corte duro) para no perder contenido, ya que el
+        validador rechazaría el fragmento completo.
+        """
+        if self.segmenter.count_tokens(texto) > config.max_tokens:
+            for pieza in self.segmenter.dividir_por_tokens(texto, config.max_tokens):
                 chunks.append(
                     self._construir_chunk(
-                        extracted_doc, texto, len(chunks), config, seccion=seccion.titulo
+                        extracted_doc, pieza, len(chunks), config,
+                        seccion=seccion, overlap_con=overlap_con,
                     )
                 )
-                continue
-            chunks.extend(self._dividir_seccion(extracted_doc, seccion, config, len(chunks)))
-        return chunks
+            return
+        chunks.append(
+            self._construir_chunk(
+                extracted_doc, texto, len(chunks), config,
+                seccion=seccion, overlap_con=overlap_con,
+            )
+        )
 
     # Fase 1: fusión de secciones pequeñas ------------------------------------
 
@@ -101,7 +128,7 @@ class HybridChunkingStrategy(ChunkingStrategy):
     # Fase 2: ventana deslizante dentro de la sección --------------------------
 
     def _dividir_seccion(
-        self, extracted_doc: ExtractedDocument, seccion: Section, config: ChunkingConfig, posicion_inicial: int
+        self, extracted_doc: ExtractedDocument, seccion: Section, config: ChunkingConfig
     ) -> List[Chunk]:
         """Aplica la ventana deslizante semántica al texto de la sección."""
         oraciones = self.segmenter.split_oraciones(seccion.texto)
@@ -114,15 +141,9 @@ class HybridChunkingStrategy(ChunkingStrategy):
             overlap_con = None
             if posicion_local > 0:
                 overlap_con = chunks[-1].chunk_id
-            chunks.append(
-                self._construir_chunk(
-                    extracted_doc,
-                    texto_chunk,
-                    posicion_inicial + posicion_local,
-                    config,
-                    seccion=seccion.titulo,
-                    overlap_con=overlap_con,
-                )
+            self._anadir_chunks(
+                extracted_doc, texto_chunk, config, chunks,
+                seccion=seccion.titulo, overlap_con=overlap_con,
             )
         return chunks
 

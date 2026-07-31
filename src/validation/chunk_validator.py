@@ -69,12 +69,12 @@ class ChunkValidator:
         doc_id_actual: str | None = None
 
         for chunk in sorted(chunks, key=lambda c: (c.doc_id, c.posicion)):
+            if doc_id_actual != chunk.doc_id:
+                doc_id_actual = chunk.doc_id
+                posicion_esperada = 0
             motivo = self._validar_duro(chunk)
             if motivo is None:
                 # Integridad de posiciones y unicidad de chunk_id por documento.
-                if doc_id_actual != chunk.doc_id:
-                    doc_id_actual = chunk.doc_id
-                    posicion_esperada = 0
                 if chunk.posicion != posicion_esperada:
                     motivo = (
                         f"posicion {chunk.posicion} fuera de secuencia "
@@ -82,9 +82,6 @@ class ChunkValidator:
                     )
                 elif chunk.chunk_id in vistos:
                     motivo = f"chunk_id duplicado: {chunk.chunk_id}"
-                else:
-                    vistos.add(chunk.chunk_id)
-                    posicion_esperada += 1
 
             if motivo is not None:
                 logger.warning(
@@ -96,7 +93,15 @@ class ChunkValidator:
                 )
                 resultado.rechazados.append(chunk)
                 resultado.motivos.append(f"[{chunk.chunk_id}] {motivo}")
+                # Un rechazo por otra regla no debe romper la secuencia de los
+                # fragmentos siguientes válidos: si este era el esperado, se
+                # avanza la posición para evitar rechazos en cascada.
+                if chunk.posicion == posicion_esperada:
+                    posicion_esperada += 1
                 continue
+
+            vistos.add(chunk.chunk_id)
+            posicion_esperada += 1
 
             # Validaciones blandas (warnings): no impiden el guardado.
             for advertencia in self._validar_blando(chunk):

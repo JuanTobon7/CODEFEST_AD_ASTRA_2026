@@ -18,7 +18,7 @@ openpyxl>=3.1          # lector de XLSX para pandas
 Pillow>=10.0           # imágenes (necesaria para pytesseract)
 # pytesseract>=0.3.10  # OCR (requiere el binario de Tesseract en el sistema)
 # easyocr>=1.7.0       # OCR alternativo (sin binario externo, pero pesado)
-# osmium>=3.6          # PBF (OpenStreetMap)
+osmium>=3.6           # PBF (OpenStreetMap)
 
 # --- Texto ------------------------------------------------------
 langdetect>=1.0.9      # detección de idioma

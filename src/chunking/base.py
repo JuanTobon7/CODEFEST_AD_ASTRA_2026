@@ -40,6 +40,14 @@ class TextSegmenter:
         """Conteo de tokens con el tokenizador del encoder elegido."""
         return self.tokenizer.count_tokens(texto)
 
+    def dividir_por_tokens(self, texto: str, max_tokens: int) -> List[str]:
+        """Parte el texto en piezas de a lo sumo ``max_tokens`` (corte duro).
+
+        Se usa cuando una oración/unidad aislada supera el límite del encoder:
+        preserva todo el contenido a costa de cortar en mitad de la oración.
+        """
+        return self.tokenizer.split_tokens(texto, max_tokens)
+
     def split_oraciones(self, texto: str) -> List[str]:
         """Divide en oraciones completas (nunca corta una oración)."""
         return self.splitter.split(texto)

@@ -23,10 +23,15 @@ logger = logging.getLogger(__name__)
 
 # Campos que suelen contener el cuerpo principal del artículo.
 _CAMPOS_TITULO = ("title", "titulo", "headline", "name", "nombre")
-_CAMPOS_CUERPO = ("body", "cuerpo", "body_paragraphs", "content", "text", "texto", "description", "descripcion")
+_CAMPOS_CUERPO = (
+    "body", "cuerpo", "body_paragraphs", "body_text", "content",
+    "text", "texto", "description", "descripcion", "abstract", "resumen",
+    "excerpt", "summary", "intro",
+)
 # Campos descriptivos que no forman parte del cuerpo indexable.
-_CAMPOS_METADATA = ("author", "autor", "date", "fecha", "published", "publicado",
-                    "tags", "categoria", "category", "url", "link", "id", "source", "fuente")
+_CAMPOS_METADATA = ("author", "autor", "authors", "autores", "date", "fecha", "published", "publicado",
+                    "tags", "categoria", "category", "url", "link", "id", "source", "fuente",
+                    "pdf_url", "doi", "issue", "keywords")
 
 
 @register_extractor(".json")
@@ -54,6 +59,11 @@ class JSONExtractor(BaseExtractor):
 
         for indice, registro in enumerate(registros):
             if not isinstance(registro, dict):
+                # Registro sin estructura (string/número): indexar tal cual.
+                if isinstance(registro, str) and registro.strip():
+                    secciones.append(
+                        Section(texto=registro.strip(), orden=len(secciones), splittable=True)
+                    )
                 continue
             titulo = self._primer_campo(registro, _CAMPOS_TITULO)
             cuerpo = self._cuerpo_registro(registro)
@@ -89,17 +99,36 @@ class JSONExtractor(BaseExtractor):
 
     # Utilidades --------------------------------------------------------------
 
-    @staticmethod
-    def _normalizar_lista(datos: Any) -> List[Any]:
-        """Acepta un array, un objeto con lista, o un único registro."""
+    @classmethod
+    def _normalizar_lista(cls, datos: Any) -> List[Any]:
+        """Acepta un array, un objeto con lista, o un único registro.
+
+        Si la raíz es un objeto con campos de registro (title/cuerpo), se
+        trata como un único registro. Si tiene listas, se prefiere la que
+        contenga dicts (registros) o la primera no vacía; las listas de
+        metadata (authors, tags...) no deben confundirse con registros.
+        """
         if isinstance(datos, list):
             return datos
         if isinstance(datos, dict):
-            for valor in datos.values():
-                if isinstance(valor, list):
-                    return valor
-            return [datos]
+            if cls._es_registro(datos):
+                return [datos]
+            listas = [v for v in datos.values() if isinstance(v, list)]
+            for lista in listas:
+                if any(isinstance(item, dict) for item in lista):
+                    return lista
+            for lista in listas:
+                if lista:
+                    return lista
+            return []
         return []
+
+    @classmethod
+    def _es_registro(cls, datos: Dict[str, Any]) -> bool:
+        """True si el objeto tiene campos de artículo (título o cuerpo)."""
+        return any(
+            clave in _CAMPOS_TITULO or clave in _CAMPOS_CUERPO for clave in datos
+        )
 
     @staticmethod
     def _primer_campo(registro: Dict[str, Any], candidatos: tuple) -> Optional[str]:

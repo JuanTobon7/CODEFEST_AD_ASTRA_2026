@@ -26,15 +26,23 @@ class StructuralChunkingStrategy(ChunkingStrategy):
 
     def chunk(self, extracted_doc: ExtractedDocument, config: ChunkingConfig) -> List[Chunk]:
         chunks: List[Chunk] = []
-        posicion = 0
         for seccion in sorted(extracted_doc.secciones, key=lambda s: s.orden):
             texto = seccion.texto.strip()
             if not texto:
                 continue
+            if self.segmenter.count_tokens(texto) > config.max_tokens:
+                # Sección más larga que el límite del encoder: corte duro por
+                # tokens para no perder contenido (el validador rechazaría).
+                for pieza in self.segmenter.dividir_por_tokens(texto, config.max_tokens):
+                    chunks.append(
+                        self._construir_chunk(
+                            extracted_doc, pieza, len(chunks), config, seccion=seccion.titulo
+                        )
+                    )
+                continue
             chunks.append(
                 self._construir_chunk(
-                    extracted_doc, texto, posicion, config, seccion=seccion.titulo
+                    extracted_doc, texto, len(chunks), config, seccion=seccion.titulo
                 )
             )
-            posicion += 1
         return chunks

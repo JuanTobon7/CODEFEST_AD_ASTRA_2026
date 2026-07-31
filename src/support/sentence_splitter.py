@@ -15,8 +15,8 @@ from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Puntuación terminal que cierra una oración (válida para ES/EN/PT).
-PUNTUACION_TERMINAL = set(".?!»›") | {"¡"}
+# Puntuación terminal que cierra una oración (ES/EN/PT + CJK).
+PUNTUACION_TERMINAL = set(".?!»›。！？．｡") | {"¡"}
 
 # Abreviaturas que no terminan oración.
 _ABREVIATURAS = {
@@ -29,7 +29,8 @@ _ABREVIATURAS = {
     "al", "cap", "sec", "secc", "párr", "parr", "a.c", "d.c", "a.m", "p.m",
 }
 
-_REGEX_DIVISOR = re.compile(r"(?<=[.!?»›])\s+|(?<=[.!?»›])\n+")
+# Divide tras puntuación terminal; el `\s*` permite oraciones CJK sin espacios.
+_REGEX_DIVISOR = re.compile(r"(?<=[.!?»›。！？．｡])\s*")
 
 
 class SentenceSplitter:
