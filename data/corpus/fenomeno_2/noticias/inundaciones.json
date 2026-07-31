@@ -1,0 +1,20 @@
+[
+  {
+    "title": "Alerta por inundaciones en la costa",
+    "body_paragraphs": [
+      "Las lluvias intensas de las últimas 48 horas provocaron el desbordamiento de varios ríos.",
+      "Las autoridades recomendaron evacuar las zonas bajas y suspendieron las clases en la región."
+    ],
+    "author": "Redacción",
+    "date": "2026-07-29"
+  },
+  {
+    "title": "Monitoreo de niveles de agua",
+    "body_paragraphs": [
+      "El sistema de alerta temprana registró un aumento sostenido del caudal en tres afluentes principales.",
+      "Se mantiene vigilancia continua sobre los puntos críticos de la cuenca."
+    ],
+    "author": "Observatorio",
+    "date": "2026-07-30"
+  }
+]

@@ -1,0 +1,30 @@
+# ============================================================
+#  Dependencias del pipeline de ingesta — CODEFEST AD ASTRA 2026
+# ============================================================
+
+# --- Núcleo ---------------------------------------------------
+pydantic>=2.5
+pydantic-settings>=2.1
+python-dotenv>=1.0
+
+# --- Persistencia ----------------------------------------------
+pymongo>=4.6
+
+# --- Extractores -----------------------------------------------
+pymupdf>=1.24          # PDF (orden de lectura + heurísticas de encabezado)
+beautifulsoup4>=4.12   # HTML
+pandas>=2.1            # CSV / XLSX
+openpyxl>=3.1          # lector de XLSX para pandas
+Pillow>=10.0           # imágenes (necesaria para pytesseract)
+# pytesseract>=0.3.10  # OCR (requiere el binario de Tesseract en el sistema)
+# easyocr>=1.7.0       # OCR alternativo (sin binario externo, pero pesado)
+# osmium>=3.6          # PBF (OpenStreetMap)
+
+# --- Texto ------------------------------------------------------
+langdetect>=1.0.9      # detección de idioma
+tiktoken>=0.6          # tokenizador del encoder (conteo de tokens)
+# spacy>=3.7           # segmentación de oraciones multilingüe
+# es_core_news_sm      # modelo spacy ES (instalar aparte: python -m spacy download es_core_news_sm)
+
+# --- Tests ------------------------------------------------------
+pytest>=8.0
