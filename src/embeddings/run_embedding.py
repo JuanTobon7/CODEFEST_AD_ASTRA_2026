@@ -32,9 +32,11 @@ from src.embeddings.embedding_config import EmbeddingConfig
 from src.embeddings.embedding_writer import EmbeddingWriter
 from src.encoders.base import EncoderConfig
 from src.encoders.factory import EncoderFactory
-from src.encoders.orchestrator import EncoderOrchestrator
+from src.encoders.orchestrator import EncoderOrchestrator, EncoderRunResult
 from src.models.chunk import Chunk
 from src.persistence.mongo_repository import MongoChunkRepository
+from src.vectorstore.models import EmbeddingRecord
+from src.vectorstore.vector_repository import MongoVectorRepository
 
 logger = logging.getLogger("run_embedding")
 
@@ -53,6 +55,31 @@ def _configurar_logging(verbose: bool) -> None:
 def _hash_texto(chunk: Chunk) -> str:
     """``hash_texto`` del chunk si ya existe (etapa de chunking); si no, se deriva."""
     return chunk.hash_texto or hashlib.sha256(chunk.texto.encode("utf-8")).hexdigest()
+
+
+def _construir_registros_embedding(
+    resultado: EncoderRunResult, chunks_por_id: dict, chunk_id_to_hash: dict
+) -> List[EmbeddingRecord]:
+    """Combina el ``EncoderRunResult`` (vectores) con la metadata del ``Chunk``
+    (Sección 5.1) para persistir cada vector como fuente de verdad en Mongo.
+    """
+    registros = []
+    for posicion, chunk_id in enumerate(resultado.chunk_ids):
+        chunk = chunks_por_id[chunk_id]
+        registros.append(
+            EmbeddingRecord(
+                chunk_id=chunk_id,
+                doc_id=chunk.doc_id,
+                fenomeno=chunk.fenomeno,
+                formato=chunk.formato,
+                encoder_name=resultado.encoder_name,
+                model_id=resultado.model_id,
+                embedding_dim=resultado.embedding_dim,
+                vector=resultado.vectors[posicion],
+                hash_texto=chunk_id_to_hash[chunk_id],
+            )
+        )
+    return registros
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -95,6 +122,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         config.mongo_uri, config.mongo_db, config.mongo_collection_embeddings_cache,
         username=config.mongo_user, password=config.mongo_password, auth_source=config.mongo_auth_source,
     )
+    repositorio_vectores = MongoVectorRepository(
+        config.mongo_uri, config.mongo_db, config.mongo_collection_embeddings,
+        username=config.mongo_user, password=config.mongo_password, auth_source=config.mongo_auth_source,
+    )
     escritor = EmbeddingWriter(config.embedding_output_dir)
 
     try:
@@ -103,6 +134,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             logger.warning("No hay chunks en la colección '%s'", config.mongo_collection_chunks)
             return 1
         chunk_id_to_hash = {c.chunk_id: _hash_texto(c) for c in chunks}
+        chunks_por_id = {c.chunk_id: c for c in chunks}
 
         for estrategia in estrategias:
             nombre = estrategia.name
@@ -115,6 +147,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             resultado = orquestador.run(chunks_a_codificar)[nombre]
             if resultado.chunk_ids:
                 escritor.write(resultado)
+                repositorio_vectores.save_many(
+                    _construir_registros_embedding(resultado, chunks_por_id, chunk_id_to_hash)
+                )
                 cache.marcar_procesados(nombre, {cid: chunk_id_to_hash[cid] for cid in resultado.chunk_ids})
                 for chunk_id in resultado.chunk_ids:
                     repositorio_chunks.mark_encoder_procesado(chunk_id, nombre)
@@ -123,6 +158,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     finally:
         repositorio_chunks.close()
         cache.close()
+        repositorio_vectores.close()
 
 
 if __name__ == "__main__":

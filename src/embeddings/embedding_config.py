@@ -24,9 +24,19 @@ class EmbeddingConfig(BaseSettings):
     mongo_collection_embeddings_cache: str = os.getenv(
         "MONGO_COLLECTION_EMBEDDINGS_CACHE", "embeddings_cache"
     )
+    mongo_collection_embeddings: str = os.getenv("MONGO_COLLECTION_EMBEDDINGS", "embeddings")
     mongo_user: Optional[str] = os.getenv("MONGO_USER", "admin")
     mongo_password: Optional[str] = os.getenv("MONGO_PASSWORD", "admin")
     mongo_auth_source: Optional[str] = os.getenv("MONGO_AUTH_SOURCE", "admin")
+
+    # Sección 5: construcción de índices FAISS por encoder.
+    faiss_index_type: str = os.getenv("FAISS_INDEX_TYPE", "flat_ip")  # flat_ip | ivf_flat | hnsw | auto
+    faiss_ivf_nlist: int = int(os.getenv("FAISS_IVF_NLIST", "100"))
+    faiss_ivf_nprobe: int = int(os.getenv("FAISS_IVF_NPROBE", "10"))
+    faiss_hnsw_m: int = int(os.getenv("FAISS_HNSW_M", "32"))
+    faiss_ivf_auto_threshold: int = int(os.getenv("FAISS_IVF_AUTO_THRESHOLD", "50000"))
+    working_index_dir: str = os.getenv("WORKING_INDEX_DIR", "working_index")
+    delivery_output_dir: str = os.getenv("DELIVERY_OUTPUT_DIR", "base_vectorial")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
