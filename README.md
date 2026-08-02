@@ -285,6 +285,110 @@ pip install -r requirements.txt   # incluye sentence-transformers + torch
 python -m src.embeddings.run_embedding --limite 500
 ```
 
-No implementa (queda para prompts posteriores): construcción del índice
-FAISS (`IndexFlatIP`, Sección 5) ni fusión de rankings multi-encoder
-(RRF/CombSUM/CombMNZ, Sección 8).
+No implementa (queda para el prompt de recuperación): fusión de rankings
+multi-encoder (RRF/CombSUM/CombMNZ, Sección 8).
+
+---
+
+## 10. Persistencia de vectores en MongoDB + índices FAISS por encoder — Sección 5
+
+Complementa la Sección 4: los vectores dejan de ser solo una caché plana en
+disco (`vectors.npy`) y pasan a tener a **MongoDB como fuente de verdad**
+(colección `embeddings`, separada de `chunks`), desde donde se construyen y
+exportan los índices **FAISS**, uno independiente por cada encoder activo.
+
+```
+src/vectorstore/
+ ├── models.py                  # EmbeddingRecord (pydantic)
+ ├── vector_repository.py       # VectorRepository (ABC) + MongoVectorRepository
+ ├── index_builder_base.py      # FaissIndexBuilderStrategy (ABC) + IndexBuildConfig
+ ├── flat_ip_strategy.py        # IndexFlatIP — exacto, sin entrenamiento (DEFAULT)
+ ├── ivf_flat_strategy.py       # IndexIVFFlat — aproximado, requiere entrenamiento
+ ├── hnsw_strategy.py           # IndexHNSWFlat — sin entrenamiento, prioriza latencia
+ ├── index_builder_factory.py   # IndexBuilderFactory (registro + resolución "auto")
+ ├── faiss_index_manager.py     # FaissIndexManager — modo operativo incremental (IndexIDMap)
+ ├── export_delivery.py         # DeliveryExporter — modo de exportación estricta
+ └── run_export_delivery.py     # CLI del modo de exportación
+tests/test_vectorstore/
+```
+
+### 10.1 Modelo de datos (`embeddings`)
+
+Un documento por `(chunk_id, encoder_name)`, con el vector empaquetado como
+`bson.Binary` (`float32.tobytes()`), no como `list[float]` — más compacto y
+más rápido de leer/escribir a escala. Índice único compuesto sobre
+`(chunk_id, encoder_name)` (upsert idempotente) + índice sobre `encoder_name`
+(para extraer eficientemente "todos los vectores de este encoder").
+
+`MongoVectorRepository` implementa `save_many()` (upsert), `find_by_encoder()`
+(cursor en streaming — nunca carga todo el corpus en memoria), `find_missing()`,
+`count_by_encoder()` y `delete_by_chunk_id()`.
+
+### 10.2 Tipo de índice FAISS — Strategy + Factory
+
+Igual que el encoder, el **tipo de índice** varía según el volumen del
+corpus y el objetivo (exactitud vs. velocidad), así que se modela con el
+mismo patrón Strategy + Factory con registro por decorador:
+
+- `FlatIPIndexStrategy` (`flat_ip`): `IndexFlatIP`, exacto, sin
+  entrenamiento. **Es el default recomendado** — para el volumen de
+  documentos esperado en este reto, un índice plano es suficiente y
+  garantiza resultados exactos (similitud coseno vía producto interno,
+  ya que `EncoderStrategy.encode()` normaliza los vectores a norma unitaria).
+- `IVFFlatIndexStrategy` (`ivf_flat`): `IndexIVFFlat`, requiere
+  entrenamiento (k-means) antes de poblarlo. Pensado para corpus grandes.
+- `HNSWIndexStrategy` (`hnsw`): `IndexHNSWFlat`, sin entrenamiento, prioriza
+  latencia de consulta sobre uso de memoria.
+- `IndexBuilderFactory.resolve("auto", n_vectors, config)`: si
+  `FAISS_INDEX_TYPE=auto`, decide entre `flat_ip` e `ivf_flat` comparando
+  `n_vectors` contra `FAISS_IVF_AUTO_THRESHOLD`, dejando la decisión
+  trazada en el log.
+
+### 10.3 Dos modos de operación
+
+- **Modo operativo (`FaissIndexManager`)**: incremental, para
+  desarrollo/pruebas iterativas. Envuelve el índice en `faiss.IndexIDMap`
+  con IDs derivados determinísticamente del `chunk_id`
+  (`sha1(chunk_id)[:15]` → `int64`), permitiendo `remove_ids` +
+  `add_with_ids` cuando un chunk se reprocesa, sin reconstruir todo el
+  índice. Se persiste en `WORKING_INDEX_DIR` y actualiza
+  `faiss_internal_id` de vuelta en `embeddings` (MongoDB actúa como el
+  almacén de metadata que exige la especificación).
+- **Modo de exportación (`DeliveryExporter` / `export_delivery.py`)**:
+  estricto, es el que genera el artefacto de entrega. Inserta los vectores
+  con `index.add()` **secuencial** (sin `IndexIDMap`) en un orden
+  determinístico (`ORDER BY doc_id, posicion` — nunca `_id` de Mongo, que
+  no es reproducible entre corridas), de forma que el orden de líneas de
+  `metadata.jsonl` coincide exactamente con los IDs internos (`0..n-1`)
+  que FAISS asigna en la indexación, tal como exige la Sección 5.3.
+  Antes de exportar, valida que no falte ningún embedding para los chunks
+  activos y que todos los vectores del encoder tengan la misma dimensión
+  (aborta con la lista de `chunk_id` faltantes si no). Al final hace un
+  test de humo (`faiss.read_index()` + `index.d`/`ntotal` esperados) y
+  registra un checksum SHA-256 en `build_log.jsonl` para verificar
+  reproducibilidad entre corridas.
+
+### 10.4 Configuración adicional (`.env`)
+
+```
+MONGO_COLLECTION_EMBEDDINGS=embeddings
+FAISS_INDEX_TYPE=flat_ip                 # flat_ip | ivf_flat | hnsw | auto
+FAISS_IVF_NLIST=100
+FAISS_IVF_NPROBE=10
+FAISS_HNSW_M=32
+FAISS_IVF_AUTO_THRESHOLD=50000
+WORKING_INDEX_DIR=working_index
+DELIVERY_OUTPUT_DIR=base_vectorial
+```
+
+### 10.5 Ejecución
+
+```bash
+pip install -r requirements.txt   # incluye faiss-cpu
+python -m src.embeddings.run_embedding --limite 500       # calcula y persiste vectores en Mongo
+python -m src.vectorstore.run_export_delivery              # exporta index.faiss + metadata.jsonl por encoder
+```
+
+No implementa todavía (próximo prompt): el módulo de recuperación (consulta
+→ vector de query → búsqueda en FAISS → fusión multi-encoder vía
+RRF/CombSUM/CombMNZ → agregación a nivel documento, Sección 8).
