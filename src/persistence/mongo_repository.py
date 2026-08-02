@@ -42,13 +42,14 @@ class MongoChunkRepository(ChunkRepository):
         if self._conectado:
             return
         try:
-            self._cliente = MongoClient(
-                self._uri,
-                username=self._username,
-                password=self._password,
-                authSource=self._auth_source,
-                serverSelectionTimeoutMS=5000
-                )
+            opciones = {"serverSelectionTimeoutMS": 5000}
+            if self._username is not None:
+                opciones["username"] = self._username
+            if self._password is not None:
+                opciones["password"] = self._password
+            if self._auth_source is not None:
+                opciones["authSource"] = self._auth_source
+            self._cliente = MongoClient(self._uri, **opciones)
             coleccion = self._cliente[self._db_name][self._collection_name]
             coleccion.create_indexes(
                 [
@@ -116,3 +117,18 @@ class MongoChunkRepository(ChunkRepository):
         self.connect()
         coleccion = self._cliente[self._db_name][self._collection_name]  # type: ignore[union-attr]
         return coleccion.find_one({"chunk_id": chunk_id}, {"_id": 1}) is not None
+
+    def find_all(self, limite: int = 0) -> List[Chunk]:
+        """Recupera chunks (opcionalmente limitado), para codificación por lotes."""
+        self.connect()
+        coleccion = self._cliente[self._db_name][self._collection_name]  # type: ignore[union-attr]
+        cursor = coleccion.find({})
+        if limite:
+            cursor = cursor.limit(limite)
+        return [Chunk.model_validate(d) for d in cursor]
+
+    def mark_encoder_procesado(self, chunk_id: str, encoder_name: str) -> None:
+        """Añade ``encoder_name`` a ``encoders_procesados`` del chunk (idempotente)."""
+        self.connect()
+        coleccion = self._cliente[self._db_name][self._collection_name]  # type: ignore[union-attr]
+        coleccion.update_one({"chunk_id": chunk_id}, {"$addToSet": {"encoders_procesados": encoder_name}})

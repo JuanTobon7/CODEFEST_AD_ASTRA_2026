@@ -200,3 +200,91 @@ metadata), estrategias puras y `ChunkValidator` (duros y blandos).
 - **Validación**: duras (campos, tipos, `num_tokens ≤ 512`, posiciones
   crecientes sin huecos, `chunk_id` único) → rechazo con log; blandas
   (puntuación terminal) → `validation_warnings` y se guarda.
+
+---
+
+## 9. Codificación semántica (embeddings) — Sección 4
+
+Toma los chunks ya persistidos en MongoDB y genera sus vectores de embedding
+con uno o varios encoders **HuggingFace** intercambiables, vía el patrón
+**Strategy**. Solo se admiten arquitecturas **encoder** (BERT y derivados);
+las arquitecturas decoder (GPT, LLaMA, Gemini, Claude...) están prohibidas
+para esta etapa.
+
+```
+src/encoders/       # EncoderStrategy (ABC) + E5/BGE-M3/LaBSE/MiniLM + Factory + Orchestrator
+src/embeddings/     # EmbeddingConfig, EmbeddingCache, EmbeddingWriter, run_embedding.py (CLI)
+tests/test_encoders/
+```
+
+### 9.1 Los 6 criterios de selección (valores verificados en las model cards de HuggingFace)
+
+| Encoder registrado | Modelo HF | Multilingüe ES/EN/PT | Dim | Max tokens | Licencia | MTEB Retrieval (avg) | Perfil |
+|---|---|---|---|---|---|---|---|
+| `e5-small` | `intfloat/multilingual-e5-small` | Sí (100+ idiomas) | 384 | 512 | MIT | 46.6 | Eficiencia |
+| `e5-base` | `intfloat/multilingual-e5-base` | Sí (100+ idiomas) | 768 | 512 | MIT | 48.9 | Balance precisión/eficiencia |
+| `e5-large` | `intfloat/multilingual-e5-large` | Sí (100+ idiomas) | 1024 | 512 | MIT | 51.4 | Alta precisión, mayor costo |
+| `bge-m3` | `BAAI/bge-m3` | Sí (100+ idiomas) | 1024 | 8192 | MIT | 48.8 | Chunks largos, denso+disperso+multi-vector |
+| `labse` | `sentence-transformers/LaBSE` | Sí (109 idiomas) | 768 | 512 | Apache-2.0 | n/d (alineación cross-lingual, no BEIR) | Fuerte alineación cross-lingual |
+| `minilm-light` | `sentence-transformers/distiluse-base-multilingual-cased-v2` | Sí | 512 | 512 | Apache-2.0 | n/d | Ligero, baja latencia, "encoder de eficiencia" |
+
+Cada `EncoderStrategy` autodeclara estos criterios vía `to_metadata()`:
+`supported_languages`, `embedding_dim`, `max_input_tokens`,
+`mteb_retrieval_score` + `benchmark_reference`, `license`,
+`avg_encode_time_ms_per_batch` (medido en runtime) + `device_preference`.
+
+### 9.2 Patrón Strategy + Factory (Information Expert)
+
+Las reglas de negocio de la Sección 6 están centralizadas en
+`EncoderStrategy` como **Information Expert**: cada estrategia es quien
+conoce su propia licencia, idiomas y límite de tokens, así que es ella
+quien decide si los cumple — el Factory y el Orquestador solo coordinan,
+no reevalúan la regla.
+
+- `EncoderStrategy` (ABC): `load()` perezoso, `encode()` (normaliza a norma
+  unitaria, resuelve prefijos `query:`/`passage:` internamente si el modelo
+  lo requiere), `to_metadata()`.
+  - `cubre_idiomas_minimos()` / `licencia_permitida()`: autoevalúan las
+    reglas de registro/licencia sobre sus propios atributos declarados.
+  - `contar_tokens()` / `excede_limite()` / `ajustar_a_limite()`: cuentan
+    tokens con el tokenizador propio del modelo cargado y truncan por
+    oraciones completas (o devuelven `None` si no es posible truncar).
+- `EncoderFactory`: registro por decorador (`@EncoderFactory.register("e5-base")`);
+  llama a `clase.cubre_idiomas_minimos()` en **registro** y a
+  `clase.licencia_permitida()` en **instanciación** (`create()`), lanzando
+  `LicenseNotAllowedError` salvo `allow_unlisted_license=True`.
+- `EncoderOrchestrator`: corre 1..N estrategias sobre el mismo lote de
+  chunks; delega en `estrategia.ajustar_a_limite()` el truncado/exclusión
+  por chunk y devuelve un `EncoderRunResult` por encoder (que se
+  autovalida al construirse: dimensión y longitud consistentes).
+
+### 9.3 Persistencia intermedia
+
+- `EmbeddingWriter`: escribe `base_vectorial/encoder_<nombre>/vectors.npy`
+  (n×d) + `chunk_ids.jsonl` (orden ordinal → `chunk_id`) + `metadata_criterios.json`.
+- `EmbeddingCache`: evita recomputar (MongoDB, colección `embeddings_cache`,
+  clave `chunk_id` + `encoder_name` + `hash_texto`).
+- `encoders_procesados: list[str]` se actualiza por chunk en la colección
+  `chunks`, para reanudar procesos interrumpidos.
+
+### 9.4 Configuración (`.env`)
+
+```
+ACTIVE_ENCODERS=e5-base,minilm-light
+EMBEDDING_BATCH_SIZE=32
+EMBEDDING_DEVICE=auto
+EMBEDDING_OUTPUT_DIR=base_vectorial
+MONGO_COLLECTION_CHUNKS=chunks
+MONGO_COLLECTION_EMBEDDINGS_CACHE=embeddings_cache
+```
+
+### 9.5 Ejecución
+
+```bash
+pip install -r requirements.txt   # incluye sentence-transformers + torch
+python -m src.embeddings.run_embedding --limite 500
+```
+
+No implementa (queda para prompts posteriores): construcción del índice
+FAISS (`IndexFlatIP`, Sección 5) ni fusión de rankings multi-encoder
+(RRF/CombSUM/CombMNZ, Sección 8).

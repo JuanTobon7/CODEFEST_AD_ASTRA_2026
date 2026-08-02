@@ -1,0 +1,17 @@
+{
+  "encoder_name": "e5-base",
+  "model_id": "intfloat/multilingual-e5-base",
+  "embedding_dim": 768,
+  "max_input_tokens": 512,
+  "supported_languages": [
+    "es",
+    "en",
+    "pt"
+  ],
+  "license": "mit",
+  "mteb_retrieval_score": 48.9,
+  "benchmark_reference": "MTEB Retrieval avg (model card intfloat/multilingual-e5-base)",
+  "avg_encode_time_ms_per_batch": 1916.4323000004515,
+  "device_preference": "cpu",
+  "is_complementary": false
+}
