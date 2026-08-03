@@ -22,10 +22,11 @@ from typing import List, Optional
 # Importar el paquete de estrategias concretas registra cada una vía
 # @EncoderFactory.register (efecto secundario necesario antes de crear()).
 from src.encoders import (  # noqa: F401
-    bge_m3_strategy,
-    labse_strategy,
-    minilm_light_strategy,
-    multilingual_e5_strategy,
+    bert_strategy,
+    bert_large_strategy,
+    bert_language_strategy,
+    bert_multilingual_uncased_strategy,
+    bert_tiny_strategy,
 )
 from src.embeddings.embedding_cache import EmbeddingCache
 from src.embeddings.embedding_config import EmbeddingConfig

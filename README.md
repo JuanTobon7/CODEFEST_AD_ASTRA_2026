@@ -212,7 +212,7 @@ las arquitecturas decoder (GPT, LLaMA, Gemini, Claude...) están prohibidas
 para esta etapa.
 
 ```
-src/encoders/       # EncoderStrategy (ABC) + E5/BGE-M3/LaBSE/MiniLM + Factory + Orchestrator
+src/encoders/       # EncoderStrategy (ABC) + checkpoints BERT (HF) + Factory + Orchestrator
 src/embeddings/     # EmbeddingConfig, EmbeddingCache, EmbeddingWriter, run_embedding.py (CLI)
 tests/test_encoders/
 ```
@@ -221,12 +221,20 @@ tests/test_encoders/
 
 | Encoder registrado | Modelo HF | Multilingüe ES/EN/PT | Dim | Max tokens | Licencia | MTEB Retrieval (avg) | Perfil |
 |---|---|---|---|---|---|---|---|
-| `e5-small` | `intfloat/multilingual-e5-small` | Sí (100+ idiomas) | 384 | 512 | MIT | 46.6 | Eficiencia |
-| `e5-base` | `intfloat/multilingual-e5-base` | Sí (100+ idiomas) | 768 | 512 | MIT | 48.9 | Balance precisión/eficiencia |
-| `e5-large` | `intfloat/multilingual-e5-large` | Sí (100+ idiomas) | 1024 | 512 | MIT | 51.4 | Alta precisión, mayor costo |
-| `bge-m3` | `BAAI/bge-m3` | Sí (100+ idiomas) | 1024 | 8192 | MIT | 48.8 | Chunks largos, denso+disperso+multi-vector |
-| `labse` | `sentence-transformers/LaBSE` | Sí (109 idiomas) | 768 | 512 | Apache-2.0 | n/d (alineación cross-lingual, no BEIR) | Fuerte alineación cross-lingual |
-| `minilm-light` | `sentence-transformers/distiluse-base-multilingual-cased-v2` | Sí | 512 | 512 | Apache-2.0 | n/d | Ligero, baja latencia, "encoder de eficiencia" |
+| `bert-multilingual` | `google-bert/bert-base-multilingual-cased` | Sí (104 idiomas) | 768 | 512 | Apache-2.0 | n/d (BERT sin fine-tuning de embeddings) | Encoder multilingüe por defecto |
+| `bert-multilingual-uncased` | `google-bert/bert-base-multilingual-uncased` | Sí (102 idiomas) | 768 | 512 | Apache-2.0 | n/d | Variante uncased, corpus con ruido de capitalización |
+| `bert-large` | `google-bert/bert-large-uncased` | No (solo EN, complementario) | 1024 | 512 | Apache-2.0 | n/d | Mayor capacidad (24 capas), solo inglés |
+| `bert-tiny` | `prajjwal1/bert-tiny` | No (solo EN, complementario) | 128 | 512 | MIT | n/d | Eficiencia/baja latencia |
+| `bert-es` | `dccuchile/bert-base-spanish-wwm-cased` (BETO) | No (solo ES, complementario) | 768 | 512 | CC-BY-4.0 | n/d | Monolingüe español de alta fidelidad |
+| `bert-en` | `google-bert/bert-base-cased` | No (solo EN, complementario) | 768 | 512 | Apache-2.0 | n/d | Monolingüe inglés de alta fidelidad |
+| `bert-pt` | `neuralmind/bert-base-portuguese-cased` (BERTimbau) | No (solo PT, complementario) | 768 | 512 | MIT | n/d | Monolingüe portugués de alta fidelidad |
+
+Todos son checkpoints BERT reales (arquitectura encoder bidireccional,
+cargados vía `transformers.AutoModel` a través de
+`sentence_transformers.models.Transformer` + *mean pooling* manual, no
+modelos ya afinados para *sentence embeddings*): por eso ninguno reporta
+score MTEB-Retrieval oficial — ver Sección 9.6 para el script que mide su
+calidad de recuperación sobre el propio corpus.
 
 Cada `EncoderStrategy` autodeclara estos criterios vía `to_metadata()`:
 `supported_languages`, `embedding_dim`, `max_input_tokens`,
@@ -249,7 +257,7 @@ no reevalúan la regla.
   - `contar_tokens()` / `excede_limite()` / `ajustar_a_limite()`: cuentan
     tokens con el tokenizador propio del modelo cargado y truncan por
     oraciones completas (o devuelven `None` si no es posible truncar).
-- `EncoderFactory`: registro por decorador (`@EncoderFactory.register("e5-base")`);
+- `EncoderFactory`: registro por decorador (`@EncoderFactory.register("bert-multilingual")`);
   llama a `clase.cubre_idiomas_minimos()` en **registro** y a
   `clase.licencia_permitida()` en **instanciación** (`create()`), lanzando
   `LicenseNotAllowedError` salvo `allow_unlisted_license=True`.
@@ -270,7 +278,7 @@ no reevalúan la regla.
 ### 9.4 Configuración (`.env`)
 
 ```
-ACTIVE_ENCODERS=e5-base,minilm-light
+ACTIVE_ENCODERS=bert-multilingual,bert-tiny
 EMBEDDING_BATCH_SIZE=32
 EMBEDDING_DEVICE=auto
 EMBEDDING_OUTPUT_DIR=base_vectorial

@@ -1,11 +1,14 @@
 """
 Estrategia abstracta de codificación semántica (patrón Strategy, Sección 4.2/4.3).
 
-Cada implementación concreta envuelve un modelo **encoder** (familia BERT y
-derivados: E5, BGE, LaBSE, MiniLM...) vía ``sentence-transformers`` — nunca
-un decoder (GPT/LLaMA/Gemini/Claude) — y autodeclara los 6 criterios de
-selección de la especificación: soporte multilingüe, dimensionalidad,
-longitud máxima de entrada, benchmark MTEB/BEIR, licencia y eficiencia.
+Cada implementación concreta envuelve un checkpoint **BERT** real de
+HuggingFace (``google-bert/*``, BETO, BERTimbau, ``prajjwal1/bert-tiny``...)
+— nunca un decoder (GPT/LLaMA/Gemini/Claude) — ensamblado vía
+``sentence_transformers.models.Transformer`` (que carga el modelo con
+``transformers.AutoModel`` internamente) + *mean pooling*, y autodeclara los
+6 criterios de selección de la especificación: soporte multilingüe,
+dimensionalidad, longitud máxima de entrada, benchmark MTEB/BEIR, licencia y
+eficiencia.
 """
 
 from __future__ import annotations

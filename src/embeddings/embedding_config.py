@@ -13,7 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class EmbeddingConfig(BaseSettings):
     """Configuración externa de la etapa de codificación semántica."""
 
-    active_encoders: str = os.getenv("ACTIVE_ENCODERS", "e5-base")
+    active_encoders: str = os.getenv("ACTIVE_ENCODERS", "bert-multilingual")
     embedding_batch_size: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
     embedding_device: str = os.getenv("EMBEDDING_DEVICE", "auto")  # auto | cpu | cuda | mps
     embedding_output_dir: str = os.getenv("EMBEDDING_OUTPUT_DIR", "base_vectorial")

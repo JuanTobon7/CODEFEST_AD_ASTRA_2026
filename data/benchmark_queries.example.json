@@ -1,0 +1,12 @@
+[
+  {
+    "_comentario": "EJEMPLO — copia este archivo a benchmark_queries.json y reemplaza query/IDs con datos reales de tu corpus (ver data/corpus/**).",
+    "query": "¿qué riesgos de seguridad plantea el uso de inteligencia artificial en el entorno espacial?",
+    "relevant_chunk_ids": ["REEMPLAZAR_CON_CHUNK_ID_REAL_1", "REEMPLAZAR_CON_CHUNK_ID_REAL_2"]
+  },
+  {
+    "_comentario": "También puedes declarar relevancia a nivel de documento completo en vez de chunk_id exacto",
+    "query": "dinámicas territoriales y capacidades estratégicas nacionales",
+    "relevant_doc_ids": ["REEMPLAZAR_CON_DOC_ID_REAL"]
+  }
+]
