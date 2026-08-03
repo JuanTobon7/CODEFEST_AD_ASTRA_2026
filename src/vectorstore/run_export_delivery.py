@@ -9,7 +9,7 @@ Actúa como Controlador delgado: parsea argumentos y delega en
 Uso::
 
     python -m src.vectorstore.run_export_delivery
-    python -m src.vectorstore.run_export_delivery --encoder e5-base
+    python -m src.vectorstore.run_export_delivery --encoder bert-multilingual
 """
 
 from __future__ import annotations

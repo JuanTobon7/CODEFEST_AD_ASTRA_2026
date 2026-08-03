@@ -35,7 +35,7 @@ class EncoderFactory:
 
     @classmethod
     def register(cls, name: str):
-        """Decorador: ``@EncoderFactory.register("e5-base")`` sobre la clase concreta.
+        """Decorador: ``@EncoderFactory.register("bert-multilingual")`` sobre la clase concreta.
 
         Raises:
             ValueError: si ``supported_languages`` no cubre es/en/pt y la
