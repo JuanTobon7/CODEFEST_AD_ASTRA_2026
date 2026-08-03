@@ -184,7 +184,7 @@ class EncoderStrategy(ABC):
             batch_size=tam_lote,
             normalize_embeddings=True,
             convert_to_numpy=True,
-            show_progress_bar=False,
+            show_progress_bar=True,
         )
         duracion_ms = (time.perf_counter() - inicio) * 1000
         n_lotes = max(1, -(-len(entradas) // tam_lote))

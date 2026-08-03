@@ -8,12 +8,25 @@ import hashlib
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, List, Sequence, TypeVar
+
+T = TypeVar("T")
 
 
 def hash_texto(texto: str) -> str:
     """Hash SHA-256 del texto (para deduplicación de fragmentos)."""
     return hashlib.sha256(texto.encode("utf-8", errors="replace")).hexdigest()
+
+
+def en_lotes(items: Sequence[T], tam: int = 2000) -> Iterator[List[T]]:
+    """Parte ``items`` en lotes de a lo sumo ``tam`` elementos.
+
+    Usado para consultas Mongo con ``$in`` sobre listas grandes de
+    ``chunk_id``: un solo ``$in`` con decenas de miles de IDs puede exceder
+    el límite de 16MB por documento BSON.
+    """
+    for inicio in range(0, len(items), tam):
+        yield list(items[inicio : inicio + tam])
 
 
 def extension_de(path: Path) -> str:

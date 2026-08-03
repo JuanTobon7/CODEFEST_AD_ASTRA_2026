@@ -12,6 +12,8 @@ from typing import Dict, List, Optional
 from pymongo import ASCENDING, IndexModel, MongoClient, UpdateOne
 from pymongo.errors import PyMongoError
 
+from src.support.utils import en_lotes
+
 logger = logging.getLogger(__name__)
 
 
@@ -75,16 +77,20 @@ class EmbeddingCache:
         self.close()
 
     def pendientes(self, encoder_name: str, chunk_id_to_hash: Dict[str, str]) -> List[str]:
-        """``chunk_id`` que NO están cacheados para ``encoder_name`` (o cambiaron de hash)."""
+        """``chunk_id`` que NO están cacheados para ``encoder_name`` (o cambiaron de hash).
+
+        Consulta por lotes: un ``$in`` con decenas de miles de ``chunk_id``
+        puede exceder el límite de 16MB por documento BSON.
+        """
         self.connect()
         coleccion = self._cliente[self._db_name][self._collection_name]  # type: ignore[union-attr]
-        cacheados = {
-            doc["chunk_id"]: doc["hash_texto"]
+        cacheados: Dict[str, str] = {}
+        for lote in en_lotes(list(chunk_id_to_hash)):
             for doc in coleccion.find(
-                {"encoder_name": encoder_name, "chunk_id": {"$in": list(chunk_id_to_hash)}},
+                {"encoder_name": encoder_name, "chunk_id": {"$in": lote}},
                 {"chunk_id": 1, "hash_texto": 1},
-            )
-        }
+            ):
+                cacheados[doc["chunk_id"]] = doc["hash_texto"]
         return self._pendientes_de(chunk_id_to_hash, cacheados)
 
     @staticmethod

@@ -21,6 +21,7 @@ from bson import Binary
 from pymongo import ASCENDING, IndexModel, MongoClient, UpdateOne
 from pymongo.errors import PyMongoError
 
+from src.support.utils import en_lotes
 from src.vectorstore.models import EmbeddingRecord
 
 logger = logging.getLogger(__name__)
@@ -197,24 +198,33 @@ class MongoVectorRepository(VectorRepository):
             yield self._desde_documento(doc)
 
     def find_by_chunk_ids(self, encoder_name: str, chunk_ids: List[str]) -> List[EmbeddingRecord]:
-        """Lectura puntual (no streaming) para lotes pequeños, p. ej. modo incremental."""
+        """Lectura puntual (no streaming) para lotes pequeños, p. ej. modo incremental.
+
+        Consulta por lotes: un ``$in`` con decenas de miles de ``chunk_id``
+        puede exceder el límite de 16MB por documento BSON.
+        """
         if not chunk_ids:
             return []
         coleccion = self._coleccion()
-        docs = coleccion.find({"encoder_name": encoder_name, "chunk_id": {"$in": list(chunk_ids)}})
-        return [self._desde_documento(d) for d in docs]
+        registros = []
+        for lote in en_lotes(chunk_ids):
+            docs = coleccion.find({"encoder_name": encoder_name, "chunk_id": {"$in": lote}})
+            registros.extend(self._desde_documento(d) for d in docs)
+        return registros
 
     def find_missing(self, encoder_name: str, chunk_ids: List[str]) -> List[str]:
         """``chunk_id`` sin vector para ``encoder_name`` entre los solicitados."""
         if not chunk_ids:
             return []
         coleccion = self._coleccion()
-        existentes = {
-            doc["chunk_id"]
-            for doc in coleccion.find(
-                {"encoder_name": encoder_name, "chunk_id": {"$in": list(chunk_ids)}}, {"chunk_id": 1}
+        existentes = set()
+        for lote in en_lotes(chunk_ids):
+            existentes.update(
+                doc["chunk_id"]
+                for doc in coleccion.find(
+                    {"encoder_name": encoder_name, "chunk_id": {"$in": lote}}, {"chunk_id": 1}
+                )
             )
-        }
         return self._faltantes_de(chunk_ids, existentes)
 
     @staticmethod
