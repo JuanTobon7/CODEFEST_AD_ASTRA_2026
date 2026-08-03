@@ -4,3 +4,14 @@ __pycache__/
 .env
 logs/
 CORPUS_CODEFEST_AD_ASTRA_2026
+repo/
+*.zip
+data/corpus/
+base_vectorial/
+embeddings/
+*.npy
+*.faiss
+venv/
+.venv/
+__pycache__/
+.env
