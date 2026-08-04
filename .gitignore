@@ -8,7 +8,6 @@ repo/
 *.zip
 data/corpus/
 base_vectorial/
-embeddings/
 *.npy
 *.faiss
 venv/

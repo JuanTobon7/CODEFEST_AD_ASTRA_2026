@@ -211,6 +211,13 @@ con uno o varios encoders **HuggingFace** intercambiables, vía el patrón
 las arquitecturas decoder (GPT, LLaMA, Gemini, Claude...) están prohibidas
 para esta etapa.
 
+> **TODO (punto abierto, confirmar con organizadores ADL antes de la entrega
+> final)**: `e5-multilingual-base`/`e5-multilingual-small` están basados en
+> XLM-RoBERTa, no en BERT estrictamente, aunque comparten la misma familia
+> de arquitectura encoder bidireccional y la Sección 4.2 del PDF solo
+> prohíbe decoders (no exige BERT puro). Falta confirmar si XLM-R cuenta
+> como "derivado de BERT" bajo esta interpretación.
+
 ```
 src/encoders/       # EncoderStrategy (ABC) + checkpoints BERT (HF) + Factory + Orchestrator
 src/embeddings/     # EmbeddingConfig, EmbeddingCache, EmbeddingWriter, run_embedding.py (CLI)
@@ -221,7 +228,9 @@ tests/test_encoders/
 
 | Encoder registrado | Modelo HF | Multilingüe ES/EN/PT | Dim | Max tokens | Licencia | MTEB Retrieval (avg) | Perfil |
 |---|---|---|---|---|---|---|---|
-| `bert-multilingual` | `google-bert/bert-base-multilingual-cased` | Sí (104 idiomas) | 768 | 512 | Apache-2.0 | n/d (BERT sin fine-tuning de embeddings) | Encoder multilingüe por defecto |
+| `e5-multilingual-base` | `intfloat/multilingual-e5-base` | Sí (~100 idiomas) | 768 | 512 | MIT | 62.3 (MIRACL nDCG@10) | Precisión semántica, alta dimensión |
+| `e5-multilingual-small` | `intfloat/multilingual-e5-small` | Sí (~100 idiomas) | 384 | 512 | MIT | 60.8 (MIRACL nDCG@10) | Eficiencia, baja dimensión |
+| `bert-multilingual` | `google-bert/bert-base-multilingual-cased` | Sí (104 idiomas) | 768 | 512 | Apache-2.0 | n/d (BERT sin fine-tuning de embeddings) | Espacio vectorial BERT puro, diversidad para la fusión RRF |
 | `bert-multilingual-uncased` | `google-bert/bert-base-multilingual-uncased` | Sí (102 idiomas) | 768 | 512 | Apache-2.0 | n/d | Variante uncased, corpus con ruido de capitalización |
 | `bert-large` | `google-bert/bert-large-uncased` | No (solo EN, complementario) | 1024 | 512 | Apache-2.0 | n/d | Mayor capacidad (24 capas), solo inglés |
 | `bert-tiny` | `prajjwal1/bert-tiny` | No (solo EN, complementario) | 128 | 512 | MIT | n/d | Eficiencia/baja latencia |
@@ -229,12 +238,22 @@ tests/test_encoders/
 | `bert-en` | `google-bert/bert-base-cased` | No (solo EN, complementario) | 768 | 512 | Apache-2.0 | n/d | Monolingüe inglés de alta fidelidad |
 | `bert-pt` | `neuralmind/bert-base-portuguese-cased` (BERTimbau) | No (solo PT, complementario) | 768 | 512 | MIT | n/d | Monolingüe portugués de alta fidelidad |
 
-Todos son checkpoints BERT reales (arquitectura encoder bidireccional,
-cargados vía `transformers.AutoModel` a través de
-`sentence_transformers.models.Transformer` + *mean pooling* manual, no
-modelos ya afinados para *sentence embeddings*): por eso ninguno reporta
-score MTEB-Retrieval oficial — ver Sección 9.6 para el script que mide su
-calidad de recuperación sobre el propio corpus.
+`e5-multilingual-base`/`e5-multilingual-small` sí reportan `mteb_retrieval_score`
+porque son checkpoints XLM-RoBERTa afinados con *contrastive learning* para
+embeddings de oración y empaquetados como modelo `sentence-transformers`
+(`SentenceTransformer(model_id)` directo, con su propio pooling). El resto
+son checkpoints BERT reales (arquitectura encoder bidireccional, cargados
+vía `transformers.AutoModel` a través de `sentence_transformers.models.Transformer`
++ *mean pooling* manual, nunca afinados para *sentence embeddings*): por eso
+ninguno reporta score MTEB-Retrieval oficial — ver Sección 9.6 para el
+script que mide su calidad de recuperación sobre el propio corpus.
+
+Solo `bert-multilingual`, `e5-multilingual-base` y `e5-multilingual-small`
+están en `ACTIVE_ENCODERS` para esta entrega (cubren es/en/pt de forma nativa
+sin necesitar enrutamiento por idioma); el resto de encoders monolingües/
+complementarios (`bert-large`, `bert-tiny`, `bert-es`, `bert-en`, `bert-pt`,
+`bert-multilingual-uncased`) siguen registrados en el código como extensión
+futura por idioma (Opción A de enrutamiento).
 
 Cada `EncoderStrategy` autodeclara estos criterios vía `to_metadata()`:
 `supported_languages`, `embedding_dim`, `max_input_tokens`,
@@ -278,8 +297,10 @@ no reevalúan la regla.
 ### 9.4 Configuración (`.env`)
 
 ```
-ACTIVE_ENCODERS=bert-multilingual,bert-tiny
+ACTIVE_ENCODERS=bert-multilingual,e5-multilingual-base,e5-multilingual-small
 EMBEDDING_BATCH_SIZE=32
+# Overrides opcionales por encoder (VRAM limitada): bert-large=8,e5-multilingual-small=64
+EMBEDDING_BATCH_SIZE_OVERRIDES=
 EMBEDDING_DEVICE=auto
 EMBEDDING_OUTPUT_DIR=base_vectorial
 MONGO_COLLECTION_CHUNKS=chunks

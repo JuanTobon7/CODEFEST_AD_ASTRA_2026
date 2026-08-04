@@ -77,7 +77,9 @@ class EncoderOrchestrator:
             logger.warning("Encoder '%s': ningún chunk codificable en el lote", estrategia.name)
             vectores = np.empty((0, estrategia.embedding_dim), dtype=np.float32)
         else:
-            vectores = estrategia.encode(textos, is_query=False, batch_size=self.batch_size)
+            # Sin batch_size explícito: usa estrategia.config.batch_size (permite
+            # un valor distinto por encoder, p. ej. EMBEDDING_BATCH_SIZE_OVERRIDES).
+            vectores = estrategia.encode(textos, is_query=False)
 
         logger.info(
             "Encoder '%s': %d vectores generados (dim=%d, excluidos=%d)",

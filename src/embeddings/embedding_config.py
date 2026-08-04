@@ -13,8 +13,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class EmbeddingConfig(BaseSettings):
     """Configuración externa de la etapa de codificación semántica."""
 
-    active_encoders: str = os.getenv("ACTIVE_ENCODERS", "bert-multilingual")
+    active_encoders: str = os.getenv("ACTIVE_ENCODERS", "bert-multilingual,e5-multilingual-base,e5-multilingual-small")
     embedding_batch_size: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
+    # Overrides opcionales por encoder, p. ej. "bert-large=8,e5-multilingual-small=64"
+    # (no todos los checkpoints caben igual de bien en la misma VRAM).
+    embedding_batch_size_overrides: str = os.getenv("EMBEDDING_BATCH_SIZE_OVERRIDES", "")
     embedding_device: str = os.getenv("EMBEDDING_DEVICE", "auto")  # auto | cpu | cuda | mps
     embedding_output_dir: str = os.getenv("EMBEDDING_OUTPUT_DIR", "base_vectorial")
 
@@ -44,3 +47,14 @@ class EmbeddingConfig(BaseSettings):
     def encoder_names(self) -> List[str]:
         """Nombres de encoders activos (``ACTIVE_ENCODERS`` separado por comas)."""
         return [n.strip().lower() for n in self.active_encoders.split(",") if n.strip()]
+
+    def batch_size_para(self, encoder_name: str) -> int:
+        """``EMBEDDING_BATCH_SIZE_OVERRIDES`` para ``encoder_name``, o el batch global."""
+        for par in self.embedding_batch_size_overrides.split(","):
+            par = par.strip()
+            if not par or "=" not in par:
+                continue
+            nombre, _, valor = par.partition("=")
+            if nombre.strip().lower() == encoder_name.lower():
+                return int(valor.strip())
+        return self.embedding_batch_size

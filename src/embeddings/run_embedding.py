@@ -27,6 +27,8 @@ from src.encoders import (  # noqa: F401
     bert_language_strategy,
     bert_multilingual_uncased_strategy,
     bert_tiny_strategy,
+    e5_multilingual_base_strategy,
+    e5_multilingual_small_strategy,
 )
 from src.embeddings.embedding_cache import EmbeddingCache
 from src.embeddings.embedding_config import EmbeddingConfig
@@ -111,8 +113,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     device_preference = None if config.embedding_device == "auto" else config.embedding_device
-    encoder_cfg = EncoderConfig(batch_size=config.embedding_batch_size, device_preference=device_preference)
-    estrategias = [EncoderFactory.create(nombre, encoder_cfg) for nombre in config.encoder_names]
+    # Cada encoder recibe su propio EncoderConfig: EMBEDDING_BATCH_SIZE_OVERRIDES
+    # permite un batch_size más chico para checkpoints grandes (p. ej. bert-large)
+    # sin saturar la VRAM, sin afectar al resto de encoders activos.
+    estrategias = [
+        EncoderFactory.create(
+            nombre,
+            EncoderConfig(
+                batch_size=config.batch_size_para(nombre),
+                device_preference=device_preference,
+            ),
+        )
+        for nombre in config.encoder_names
+    ]
     orquestador = EncoderOrchestrator(estrategias, batch_size=config.embedding_batch_size)
 
     repositorio_chunks = MongoChunkRepository(
