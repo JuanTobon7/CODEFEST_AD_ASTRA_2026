@@ -47,7 +47,7 @@ src/
  ├── validation/     # ChunkValidator (duras → rechazo; blandas → warnings)
  ├── persistence/    # ChunkRepository (ABC) + MongoChunkRepository
  ├── pipeline/       # IngestionPipeline (un archivo) + BatchIngestor (lote) + CorpusService (escaneo)
- ├── support/        # Tokenizer (tiktoken), SentenceSplitter (spacy/regex), utils
+ ├── support/        # Tokenizer (BERT WordPiece), SentenceSplitter (spacy/regex), utils
  ├── models/         # ExtractedDocument, Section, Chunk, ChunkingConfig, Settings, IngestionResult, BatchSummary
  └── run_ingestion.py  # Controlador CLI delgado (GRASP): delega en BatchIngestor
 tests/               # pytest: extractores, chunking, validador, cleaner, batch
@@ -187,8 +187,9 @@ metadata), estrategias puras y `ChunkValidator` (duros y blandos).
 
 ## 8. Notas técnicas
 
-- **Tokens**: se cuentan con `tiktoken` (modelo `cl100k_base`, configurable),
-  nunca con `len(texto.split())`. Límite del encoder: `MAX_TOKENS` (512).
+- **Tokens**: se cuentan con el tokenizador WordPiece de BERT (`transformers.AutoTokenizer`,
+  modelo `google-bert/bert-base-multilingual-cased`, configurable), nunca con
+  `len(texto.split())`. Límite del encoder: `MAX_TOKENS` (512).
 - **Completitud lingüística**: los cortes retroceden al final de la última
   oración completa (spacy si está instalado; regex multilingüe como respaldo).
 - **Metadata obligatoria por fragmento** (Tabla 1): `doc_id`, `chunk_id`,

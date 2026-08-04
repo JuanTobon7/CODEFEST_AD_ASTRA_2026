@@ -2,9 +2,11 @@
 Contador de tokens usando el tokenizador del encoder elegido.
 
 No se usa ``len(texto.split())``: el conteo debe ser fiel al límite del
-encoder (512 tokens). Por defecto se emplea ``tiktoken``; si no está
-instalado se cae a un tokenizador aproximado (regex) para que el pipeline
-siga siendo ejecutable en entornos mínimos.
+encoder (512 tokens). Por defecto se emplea el tokenizador WordPiece de
+BERT (``transformers.AutoTokenizer``, familia usada por todos los
+encoders del proyecto); si no está instalado se cae a un tokenizador
+aproximado (regex) para que el pipeline siga siendo ejecutable en
+entornos mínimos.
 """
 
 from __future__ import annotations
@@ -22,22 +24,22 @@ _WORD_RE = re.compile(r"\S+|[.,;:!?»«\"'()\[\]{}]")
 class Tokenizer:
     """Contador de tokens con API uniforme independiente del backend."""
 
-    def __init__(self, model: str = "cl100k_base") -> None:
+    def __init__(self, model: str = "google-bert/bert-base-multilingual-cased") -> None:
         self.model = model
         self._enc = self._cargar_encoder(model)
 
     @staticmethod
     def _cargar_encoder(model: str):
-        """Carga el encoder de tiktoken o devuelve ``None`` (modo aproximado)."""
+        """Carga el tokenizador de BERT (transformers) o devuelve ``None`` (modo aproximado)."""
         try:
-            import tiktoken  # type: ignore
+            from transformers import AutoTokenizer  # type: ignore
 
-            enc = tiktoken.get_encoding(model)
-            logger.info("Tokenizer tiktoken cargado: %s", model)
+            enc = AutoTokenizer.from_pretrained(model)
+            logger.info("Tokenizer BERT (transformers) cargado: %s", model)
             return enc
-        except Exception as exc:  # pragma: no cover - entorno sin tiktoken
+        except Exception as exc:  # pragma: no cover - entorno sin transformers
             logger.warning(
-                "tiktoken no disponible (%s); usando tokenizador aproximado (regex).", exc
+                "transformers no disponible (%s); usando tokenizador aproximado (regex).", exc
             )
             return None
 
@@ -46,7 +48,7 @@ class Tokenizer:
         if not texto:
             return 0
         if self._enc is not None:
-            return len(self._enc.encode(texto))
+            return len(self._enc.encode(texto, add_special_tokens=False))
         return len(_WORD_RE.findall(texto))
 
     def truncate(self, texto: str, max_tokens: int) -> str:
@@ -54,7 +56,7 @@ class Tokenizer:
         if self.count_tokens(texto) <= max_tokens:
             return texto
         if self._enc is not None:
-            tokens = self._enc.encode(texto)[:max_tokens]
+            tokens = self._enc.encode(texto, add_special_tokens=False)[:max_tokens]
             return self._enc.decode(tokens)
         return " ".join(_WORD_RE.findall(texto)[:max_tokens])
 
@@ -68,7 +70,7 @@ class Tokenizer:
         if self.count_tokens(texto) <= max_tokens:
             return [texto]
         if self._enc is not None:
-            tokens = self._enc.encode(texto)
+            tokens = self._enc.encode(texto, add_special_tokens=False)
             piezas: List[str] = []
             i = 0
             n = len(tokens)
@@ -102,7 +104,7 @@ def _get_tokenizer(model: str) -> Tokenizer:
 class TokenizerFactory:
     """Factory simple de tokenizadores (cacheados por modelo)."""
 
-    def __init__(self, model: str = "cl100k_base") -> None:
+    def __init__(self, model: str = "google-bert/bert-base-multilingual-cased") -> None:
         self.model = model
 
     def create(self) -> Tokenizer:

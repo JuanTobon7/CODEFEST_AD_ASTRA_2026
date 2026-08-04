@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     chunking_strategy: str = os.getenv("CHUNKING_STRATEGY", "hybrid")
 
     # Tokenización y segmentación de oraciones
-    tokenizer_model: str = os.getenv("TOKENIZER_MODEL", "cl100k_base")
+    tokenizer_model: str = os.getenv("TOKENIZER_MODEL", "google-bert/bert-base-multilingual-cased")
     sentence_model: str = os.getenv("SENTENCE_MODEL", "es_core_news_sm")
     default_language: str = os.getenv("DEFAULT_LANGUAGE", "es")
 

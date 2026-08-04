@@ -29,7 +29,7 @@ class TextSegmenter:
         self.splitter = splitter
 
     @classmethod
-    def crear(cls, tokenizer_model: str = "cl100k_base", sentence_model: str = "es_core_news_sm") -> "TextSegmenter":
+    def crear(cls, tokenizer_model: str = "google-bert/bert-base-multilingual-cased", sentence_model: str = "es_core_news_sm") -> "TextSegmenter":
         """Construye un segmentador con factories (tokenizador cacheado)."""
         return cls(
             tokenizer=TokenizerFactory(tokenizer_model).create(),
