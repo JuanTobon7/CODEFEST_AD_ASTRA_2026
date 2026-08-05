@@ -90,7 +90,10 @@ def _parser() -> argparse.ArgumentParser:
         description="Codificación semántica de chunks (CODEFEST AD ASTRA 2026)"
     )
     parser.add_argument(
-        "--limite", type=int, default=0, help="Procesar solo los primeros N chunks (0 = todos)"
+        "--limite",
+        type=int,
+        default=0,
+        help="Procesar hasta N chunks repartidos equitativamente entre los 3 fenómenos (0 = todos)",
     )
     parser.add_argument("--verbose", action="store_true", help="Logging en nivel DEBUG")
     return parser
@@ -143,10 +146,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     escritor = EmbeddingWriter(config.embedding_output_dir)
 
     try:
-        chunks = repositorio_chunks.find_all(args.limite)
+        # Con --limite, el lote se reparte equitativamente entre los fenómenos
+        # (1000 -> ~333 por fenómeno) para no sesgar la cobertura del índice
+        # hacia un solo fenómeno (el orden natural favorece a F1).
+        if args.limite > 0:
+            chunks = repositorio_chunks.find_all_balanceado(args.limite)
+        else:
+            chunks = repositorio_chunks.find_all()
         if not chunks:
             logger.warning("No hay chunks en la colección '%s'", config.mongo_collection_chunks)
             return 1
+        por_fenomeno = {f: sum(1 for c in chunks if c.fenomeno == f) for f in (1, 2, 3)}
+        logger.info("Lote de %d chunks por fenómeno: %s", len(chunks), por_fenomeno)
         chunk_id_to_hash = {c.chunk_id: _hash_texto(c) for c in chunks}
         chunks_por_id = {c.chunk_id: c for c in chunks}
 

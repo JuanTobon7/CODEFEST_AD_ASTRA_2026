@@ -22,11 +22,17 @@ patrones y estructura.
 
 from __future__ import annotations
 
+import json
+import logging
 import re
+from pathlib import Path
 from typing import Any, Dict, List
 
+from src.queries.loader import N_QUERIES
 from src.queries.models import QUERY_ID_PATTERN
 from src.retrieval.chunk_ops import contar_palabras
+
+logger = logging.getLogger(__name__)
 
 N_DOCS = 3
 N_FRAGMENTS = 10
@@ -37,14 +43,20 @@ _QUERY_ID_MENSAJE = re.compile(r"^q\d{3}$")
 
 
 def _build_documents(query_id: str, documentos_crudos: List[Any]) -> List[Dict[str, Any]]:
-    """Construye y valida la sección ``documents`` del esquema."""
-    if len(documentos_crudos) != N_DOCS:
+    """Construye y valida la sección ``documents`` del esquema.
+
+    ``retrieve()`` ya devuelve top-3 (``aggregate_to_documents`` recorta a
+    ``n_docs``); por robustez, si vinieran más se recortan a los 3 primeros
+    (orden de relevancia) y si vinieran menos es un error (no se inventan
+    ``doc_id``).
+    """
+    if len(documentos_crudos) < N_DOCS:
         raise ValueError(
             f"[{query_id}] 'documents' debe tener exactamente {N_DOCS} "
             f"elementos, se obtuvieron {len(documentos_crudos)}"
         )
     documents: List[Dict[str, Any]] = []
-    for rank, doc_id in enumerate(documentos_crudos, start=1):
+    for rank, doc_id in enumerate(documentos_crudos[:N_DOCS], start=1):
         doc_id = str(doc_id).strip()
         if not doc_id:
             raise ValueError(f"[{query_id}] documents[{rank}] tiene doc_id vacío")
@@ -80,15 +92,28 @@ def _build_one_fragment(query_id: str, rank: int, fragmento: Dict[str, Any]) -> 
 
 
 def _build_fragments(query_id: str, fragmentos_crudos: List[Any]) -> List[Dict[str, Any]]:
-    """Construye y valida la sección ``fragments`` del esquema."""
-    if len(fragmentos_crudos) != N_FRAGMENTS:
+    """Construye y valida la sección ``fragments`` del esquema.
+
+    Tras el split/merge (Sección 9.2.1), ``retrieve()`` puede devolver MÁS de
+    10 fragmentos: un fragmento largo se divide en sub-fragmentos que ocupan
+    sus propios ranks conservando el ``chunk_id`` del padre. El reglamento
+    exige EXACTAMENTE 10 en orden de relevancia -> se recortan los primeros 10
+    (la lista ya viene ordenada por score RRF descendente). Si vinieran menos
+    de 10 es un error (no se inventa texto).
+    """
+    if len(fragmentos_crudos) < N_FRAGMENTS:
         raise ValueError(
             f"[{query_id}] 'fragments' debe tener exactamente {N_FRAGMENTS} "
             f"elementos, se obtuvieron {len(fragmentos_crudos)}"
         )
+    if len(fragmentos_crudos) > N_FRAGMENTS:
+        logger.info(
+            "[%s] retrieve() devolvió %d fragmentos (split/merge); se conservan los top-%d",
+            query_id, len(fragmentos_crudos), N_FRAGMENTS,
+        )
     fragments = [
         _build_one_fragment(query_id, rank, fragmento)
-        for rank, fragmento in enumerate(fragmentos_crudos, start=1)
+        for rank, fragmento in enumerate(fragmentos_crudos[:N_FRAGMENTS], start=1)
     ]
 
     ranks_frag = sorted(f["rank"] for f in fragments)
@@ -126,3 +151,35 @@ def build_result_object(query_id: str, retrieval_output: Dict[str, Any]) -> Dict
     fragments = _build_fragments(query_id, fragmentos_crudos)
 
     return {"query_id": query_id, "documents": documents, "fragments": fragments}
+
+
+def verificar_resultados(ruta_salida: Path, esperadas: int, fallidas: List[str]) -> None:
+    """Segunda pasada de verificación del archivo ``resultados.jsonl`` escrito.
+
+    Relee el archivo y valida que cada línea sea JSON parseable y que el
+    conteo coincida con lo escrito; advierte si quedó por debajo de las 50.
+    """
+    with open(ruta_salida, "r", encoding="utf-8") as f:
+        lineas = [linea for linea in f.read().split("\n") if linea]
+
+    for numero, linea in enumerate(lineas, start=1):
+        try:
+            json.loads(linea)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Verificación falló: línea {numero} de '{ruta_salida}' no es JSON válido: {exc}"
+            ) from exc
+
+    if len(lineas) != esperadas:
+        raise ValueError(
+            f"Verificación falló: se escribieron {esperadas} líneas pero se "
+            f"leyeron {len(lineas)}"
+        )
+
+    if len(lineas) < N_QUERIES:
+        logger.warning(
+            "Solo se escribieron %d/%d líneas (consultas fallidas: %s)",
+            len(lineas), N_QUERIES, fallidas,
+        )
+    else:
+        logger.info("Verificación OK: %d líneas, todas JSON válido.", len(lineas))

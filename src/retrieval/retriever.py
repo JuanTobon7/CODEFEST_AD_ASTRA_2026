@@ -223,6 +223,22 @@ def _construir_retriever_default(config: Optional[EmbeddingConfig] = None) -> Re
     return Retriever(indices=indices, metadata=metadata, encoders=encoders)
 
 
+# Cache del retriever por defecto. La firma pública del reto construye un
+# Retriever por llamada, pero un lote de 50 consultas (Sección 9) no debe
+# recargar los modelos por consulta: el Retriever es reutilizable porque los
+# filtros y parámetros de búsqueda se pasan por llamada, y su estado solo
+# cambia con métricas (avg_encode_time_ms_per_batch), no con la consulta.
+_retriever_default_cache: Optional["Retriever"] = None
+
+
+def _retriever_default() -> "Retriever":
+    """Devuelve (y cachea) el :class:`Retriever` por defecto de la entrega."""
+    global _retriever_default_cache
+    if _retriever_default_cache is None:
+        _retriever_default_cache = _construir_retriever_default()
+    return _retriever_default_cache
+
+
 def retrieve(
     query: str,
     phenomenon_filter=None,
@@ -236,14 +252,15 @@ def retrieve(
 ) -> dict:
     """Punto de entrada del reto (Sección 8): recupera fragmentos y documentos.
 
-    Construye un :class:`Retriever` por defecto (encoders activos de la
-    config + artefactos de entrega en ``base_vectorial/``) y delega en él.
+    Usa el :class:`Retriever` por defecto (encoders activos de la config +
+    artefactos de entrega en ``base_vectorial/``), cacheado entre llamadas
+    para que un lote de consultas no recargue los modelos por cada una.
 
     Returns:
         ``{"documents": [doc_id_1, doc_id_2, doc_id_3],
             "fragments": [{"chunk_id", "doc_id", "text", "score", ...}, ...]}``
     """
-    retriever = _construir_retriever_default()
+    retriever = _retriever_default()
     resultado = retriever.retrieve(
         query=query,
         phenomenon_filter=phenomenon_filter,

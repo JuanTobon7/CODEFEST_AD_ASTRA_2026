@@ -9,7 +9,7 @@ Repositorio MongoDB de fragmentos (pymongo).
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pymongo import ASCENDING, IndexModel, MongoClient, UpdateOne
 from pymongo.errors import PyMongoError
@@ -102,7 +102,7 @@ class MongoChunkRepository(ChunkRepository):
                 resultado.modified_count,
             )
         except PyMongoError as exc:
-            logger.error("Fallo al persistir fragmentos: %s", exc)
+            logger.exception("Fallo al persistir fragmentos: %s", exc)
             raise
 
     def find_by_doc_id(self, doc_id: str) -> List[Chunk]:
@@ -126,6 +126,46 @@ class MongoChunkRepository(ChunkRepository):
         if limite:
             cursor = cursor.limit(limite)
         return [Chunk.model_validate(d) for d in cursor]
+
+    @staticmethod
+    def _cuotas_por_fenomeno(limite: int, n_fenomenos: int = 3) -> Dict[int, int]:
+        """Reparte ``limite`` en cuotas por fenómeno (1..``n_fenomenos``).
+
+        Cuota base = ``limite // n_fenomenos``; el residuo se asigna uno a
+        cada uno de los primeros fenómenos (determinista). Con ``limite <= 0``
+        devuelve ``{}`` (sin tope: todos los chunks).
+        """
+        if limite <= 0:
+            return {}
+        cuota = limite // n_fenomenos
+        residuo = limite % n_fenomenos
+        return {
+            fenomeno: cuota + (1 if fenomeno <= residuo else 0)
+            for fenomeno in range(1, n_fenomenos + 1)
+        }
+
+    def find_all_balanceado(self, limite: int, n_fenomenos: int = 3) -> List[Chunk]:
+        """Recupera hasta ``limite`` chunks repartidos equitativamente entre los
+        ``n_fenomenos`` fenómenos (p. ej. 1000 -> ~333 por fenómeno).
+
+        Determinista: cada fenómeno se consulta por separado, ordenado por
+        ``chunk_id``, con su cuota (:meth:`_cuotas_por_fenomeno`). Con
+        ``limite <= 0`` delega en :meth:`find_all` (todos los chunks).
+        """
+        cuotas = self._cuotas_por_fenomeno(limite, n_fenomenos)
+        if not cuotas:
+            return self.find_all()
+        self.connect()
+        coleccion = self._cliente[self._db_name][self._collection_name]  # type: ignore[union-attr]
+        chunks: List[Chunk] = []
+        for fenomeno, tope in cuotas.items():
+            docs = coleccion.find({"fenomeno": fenomeno}).sort("chunk_id", ASCENDING).limit(tope)
+            chunks.extend(Chunk.model_validate(d) for d in docs)
+        logger.info(
+            "Lote balanceado: %d chunks en %d fenómenos con cuotas %s",
+            len(chunks), n_fenomenos, cuotas,
+        )
+        return chunks
 
     def mark_encoder_procesado(self, chunk_id: str, encoder_name: str) -> None:
         """Añade ``encoder_name`` a ``encoders_procesados`` del chunk (idempotente)."""
