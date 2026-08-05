@@ -28,6 +28,11 @@ _CAMPOS_CUERPO = (
     "text", "texto", "description", "descripcion", "abstract", "resumen",
     "excerpt", "summary", "intro",
 )
+
+# Puntuación que cierra una oración (alineada con SentenceSplitter).
+_PUNTUACION_TERMINAL = ".!?»›。！？．｡…"
+# Códigos tipo "001-17"/"018-20" (municipios/departamentos en alertas tempranas).
+_REGEX_CODIGO = re.compile(r"^\d{2,3}-\d{2}$")
 # Campos descriptivos que no forman parte del cuerpo indexable.
 _CAMPOS_METADATA = ("author", "autor", "authors", "autores", "date", "fecha", "published", "publicado",
                     "tags", "categoria", "category", "url", "link", "id", "source", "fuente",
@@ -191,6 +196,7 @@ class JSONExtractor(BaseExtractor):
             _agregar(registro["links"])
 
         if partes:
+            partes = [cls._normalizar_parrafo(p) for p in partes]
             return re.sub(r"\n{3,}", "\n\n", "\n".join(partes))
         # Si no hay campos de cuerpo conocidos, indexar pares clave: valor
         # de campos no descriptivos.
@@ -198,5 +204,40 @@ class JSONExtractor(BaseExtractor):
             if clave in _CAMPOS_METADATA or clave in _CAMPOS_TITULO:
                 continue
             if isinstance(valor, str) and valor.strip():
-                partes.append(f"{clave}: {valor.strip()}")
+                partes.append(f"{clave}: {cls._normalizar_parrafo(valor.strip())}")
         return "\n".join(partes)
+
+    @classmethod
+    def _termina_en_puntuacion(cls, texto: str) -> bool:
+        """True si el texto termina en puntuación que cierra oración."""
+        return bool(texto.rstrip()) and texto.rstrip()[-1] in _PUNTUACION_TERMINAL
+
+    @classmethod
+    def _normalizar_parrafo(cls, texto: str) -> str:
+        """Reconstruye fronteras oracionales reales en párrafos estructurados.
+
+        Los JSON de alertas tempranas (Sección 3.2, estrategia estructural)
+        concatenan campos sin puntuación real: listados de códigos
+        ("001-17 001-18 ...") o enumeraciones separadas por ';'. Pasados tal
+        cual al chunking, la sección entera se lee como una sola oración de
+        >512 tokens y el encoder no puede truncarla sin partir frases, por lo
+        que el chunk queda excluido del índice (Sección 4.3).
+
+        Reglas aplicadas (conservadoras: nunca tocan prosa ya puntuada):
+          * Listado de códigos NNN-NN (3+ tokens) -> una oración por código.
+          * Enumeración ';' sin puntuación de cierre -> una oración por ítem.
+          * Párrafo sin puntuación de cierre -> se le añade '.' final.
+        """
+        t = texto.strip()
+        if not t:
+            return t
+        tokens = t.split()
+        if len(tokens) >= 3 and all(_REGEX_CODIGO.match(tok) for tok in tokens):
+            return " ".join(f"{tok}." for tok in tokens)
+        if ";" in t and t.count(";") >= 2 and not cls._termina_en_puntuacion(t):
+            items = [i.strip() for i in t.split(";") if i.strip()]
+            if len(items) >= 2:
+                return " ".join(cls._normalizar_parrafo(i) for i in items)
+        if not cls._termina_en_puntuacion(t):
+            return t + "."
+        return t
