@@ -14,6 +14,8 @@ from typing import Dict, Type
 
 from src.chunking.base import ChunkingStrategy, TextSegmenter
 from src.chunking.hybrid_strategy import HybridChunkingStrategy
+from src.chunking.paragraph_overlap_strategy import ParagraphOverlapChunkingStrategy
+from src.chunking.paragraph_strategy import ParagraphChunkingStrategy
 from src.chunking.semantic_overlap_strategy import SemanticOverlapChunkingStrategy
 from src.chunking.structural_strategy import StructuralChunkingStrategy
 from src.models.config import ChunkingConfig
@@ -24,6 +26,8 @@ _REGISTRO: Dict[str, Type[ChunkingStrategy]] = {
     "structural": StructuralChunkingStrategy,
     "semantic": SemanticOverlapChunkingStrategy,
     "hybrid": HybridChunkingStrategy,
+    "paragraph": ParagraphChunkingStrategy,
+    "paragraph_overlap": ParagraphOverlapChunkingStrategy,
 }
 
 
@@ -37,7 +41,8 @@ class ChunkingStrategyFactory:
         """Instancia la estrategia ``nombre`` inyectando el segmentador.
 
         Args:
-            nombre: ``structural``, ``semantic`` o ``hybrid``.
+            nombre: ``structural``, ``semantic``, ``hybrid``, ``paragraph``
+                o ``paragraph_overlap``.
             config: Configuración usada para validar los parámetros.
 
         Raises:

@@ -197,7 +197,9 @@ class JSONExtractor(BaseExtractor):
 
         if partes:
             partes = [cls._normalizar_parrafo(p) for p in partes]
-            return re.sub(r"\n{3,}", "\n\n", "\n".join(partes))
+            # Los párrafos se separan con línea en blanco (\n\n): es la
+            # convención que espera la estrategia de chunking por párrafo.
+            return re.sub(r"\n{3,}", "\n\n", "\n\n".join(partes))
         # Si no hay campos de cuerpo conocidos, indexar pares clave: valor
         # de campos no descriptivos.
         for clave, valor in registro.items():
@@ -205,7 +207,7 @@ class JSONExtractor(BaseExtractor):
                 continue
             if isinstance(valor, str) and valor.strip():
                 partes.append(f"{clave}: {cls._normalizar_parrafo(valor.strip())}")
-        return "\n".join(partes)
+        return "\n\n".join(partes)
 
     @classmethod
     def _termina_en_puntuacion(cls, texto: str) -> bool:

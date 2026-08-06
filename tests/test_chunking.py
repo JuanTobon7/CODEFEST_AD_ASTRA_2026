@@ -1,5 +1,5 @@
 """
-Tests de las estrategias de chunking (híbrida, estructural y semántica).
+Tests de las estrategias de chunking (híbrida, estructural, semántica y por párrafo).
 """
 
 from __future__ import annotations
@@ -9,6 +9,8 @@ import pytest
 from src.chunking.base import TextSegmenter
 from src.chunking.factory import ChunkingStrategyFactory
 from src.chunking.hybrid_strategy import HybridChunkingStrategy
+from src.chunking.paragraph_overlap_strategy import ParagraphOverlapChunkingStrategy
+from src.chunking.paragraph_strategy import ParagraphChunkingStrategy
 from src.chunking.semantic_overlap_strategy import SemanticOverlapChunkingStrategy
 from src.chunking.structural_strategy import StructuralChunkingStrategy
 from src.models.config import ChunkingConfig
@@ -146,6 +148,8 @@ def test_factory_estrategias_por_nombre(segmenter: TextSegmenter, chunking_confi
     assert isinstance(factory.create("structural", chunking_config), StructuralChunkingStrategy)
     assert isinstance(factory.create("semantic", chunking_config), SemanticOverlapChunkingStrategy)
     assert isinstance(factory.create("hybrid", chunking_config), HybridChunkingStrategy)
+    assert isinstance(factory.create("paragraph", chunking_config), ParagraphChunkingStrategy)
+    assert isinstance(factory.create("paragraph_overlap", chunking_config), ParagraphOverlapChunkingStrategy)
     with pytest.raises(ValueError, match="desconocida"):
         factory.create("otra_estrategia", chunking_config)
 
@@ -171,3 +175,154 @@ def test_semantic_ignora_estructura_y_solapa(segmenter: TextSegmenter, chunking_
     assert chunks[0].seccion is None  # ignora la estructura
     for c in chunks[1:]:
         assert c.overlap_con is not None
+
+
+# --- Estrategia por párrafo pura -------------------------------------------------
+
+
+def test_paragraph_respeta_saltos_de_parrafo(segmenter: TextSegmenter, chunking_config: ChunkingConfig):
+    """Cada párrafo original (separado por línea en blanco) es un chunk exacto."""
+    texto = (
+        "Primer párrafo del documento con contenido sustancial.\n\n"
+        "Segundo párrafo del documento con contenido sustancial.\n\n"
+        "Tercer párrafo del documento con contenido sustancial."
+    )
+    secciones = [_sec(texto, orden=0, titulo="Introducción")]
+    chunks = ParagraphChunkingStrategy(segmenter).chunk(_doc(secciones), chunking_config)
+
+    assert len(chunks) == 3
+    assert [c.texto for c in chunks] == [
+        "Primer párrafo del documento con contenido sustancial.",
+        "Segundo párrafo del documento con contenido sustancial.",
+        "Tercer párrafo del documento con contenido sustancial.",
+    ]
+    assert [c.posicion for c in chunks] == [0, 1, 2]
+    assert all(c.chunking_strategy == "paragraph" for c in chunks)
+    assert all(c.seccion == "Introducción" for c in chunks)
+
+
+def test_paragraph_conserva_lineas_envueltas_del_parrafo(segmenter: TextSegmenter, chunking_config: ChunkingConfig):
+    """Los saltos de línea simples son líneas envueltas: NO separan párrafos."""
+    texto = "Primera línea del párrafo\nsegunda línea envuelta\ntercera línea envuelta"
+    secciones = [_sec(texto, orden=0)]
+    chunks = ParagraphChunkingStrategy(segmenter).chunk(_doc(secciones), chunking_config)
+
+    assert len(chunks) == 1
+    assert "segunda línea envuelta" in chunks[0].texto
+
+
+def test_paragraph_no_fusiona_parrafos_pequenos(segmenter: TextSegmenter, chunking_config: ChunkingConfig):
+    """Aunque estén por debajo de min_chunk_tokens, los párrafos no se fusionan."""
+    texto = "Corto uno.\n\nCorto dos.\n\nCorto tres."
+    secciones = [_sec(texto, orden=0)]
+    chunks = ParagraphChunkingStrategy(segmenter).chunk(_doc(secciones), chunking_config)
+
+    assert len(chunks) == 3, "La estrategia por párrafo respeta la estructura del autor"
+
+
+def test_paragraph_parrafo_gigante_se_parte_por_tokens(segmenter: TextSegmenter, chunking_config: ChunkingConfig):
+    """Un párrafo que excede max_tokens se parte por tokens sin perder contenido."""
+    parrafo_gigante = " ".join(f"palabra_{i}" for i in range(600)) + "."
+    secciones = [_sec(parrafo_gigante, orden=0)]
+    chunks = ParagraphChunkingStrategy(segmenter).chunk(_doc(secciones), chunking_config)
+
+    assert len(chunks) >= 2
+    assert all(c.num_tokens <= chunking_config.max_tokens for c in chunks)
+    reconstruido = " ".join(c.texto for c in chunks)
+    assert "palabra_0" in reconstruido and "palabra_599" in reconstruido
+
+
+def test_paragraph_seccion_atomica_un_solo_chunk(segmenter: TextSegmenter, chunking_config: ChunkingConfig):
+    """Filas CSV/XLSX y elementos PBF (splittable=False) no se segmentan en párrafos."""
+    fila = "fila1: a b c\nfila2: d e f\nfila3: g h i"
+    secciones = [_sec(fila, orden=0, splittable=False)]
+    chunks = ParagraphChunkingStrategy(segmenter).chunk(_doc(secciones), chunking_config)
+
+    assert len(chunks) == 1
+    assert "fila3: g h i" in chunks[0].texto
+
+
+# --- Híbrida por párrafo + superposición ------------------------------------------
+
+
+def _muchos_parrafos(n: int, frase: str = "Párrafo con contenido temático para la prueba") -> str:
+    """Genera n párrafos separados por línea en blanco."""
+    return "\n\n".join(f"{frase} {i}." for i in range(n))
+
+
+def test_paragraph_overlap_seccion_corta_un_chunk(segmenter: TextSegmenter, chunking_config: ChunkingConfig):
+    """Sección por debajo de chunk_size: un solo chunk que preserva los párrafos."""
+    secciones = [_sec("Un párrafo breve.\n\nOtro párrafo breve.", orden=0)]
+    chunks = ParagraphOverlapChunkingStrategy(segmenter).chunk(_doc(secciones), chunking_config)
+
+    assert len(chunks) == 1
+    assert "\n\n" in chunks[0].texto  # se preserva la estructura de párrafos
+    assert chunks[0].overlap_con is None
+
+
+def test_paragraph_overlap_genera_ventanas_solapadas(segmenter: TextSegmenter, chunking_config_pequeno: ChunkingConfig):
+    """Muchos párrafos se agrupan en ventanas consecutivas con overlap."""
+    secciones = [_sec(_muchos_parrafos(12), orden=0)]
+    chunks = ParagraphOverlapChunkingStrategy(segmenter).chunk(_doc(secciones), chunking_config_pequeno)
+
+    assert len(chunks) >= 2
+    for c in chunks[1:]:
+        assert c.overlap_con is not None, "Las ventanas consecutivas deben solaparse"
+    # Cobertura completa: el primer y el último párrafo aparecen.
+    assert "Párrafo con contenido temático para la prueba 0." in chunks[0].texto
+    assert "Párrafo con contenido temático para la prueba 11." in chunks[-1].texto
+    # Cada chunk agrupa párrafos completos (nunca los parte).
+    for c in chunks:
+        partes = c.texto.split("\n\n")
+        assert partes, "El chunk no debe estar vacío"
+        assert all("Párrafo con contenido temático" in p for p in partes)
+
+
+def test_paragraph_overlap_nunca_parte_un_parrafo(segmenter: TextSegmenter, chunking_config_pequeno: ChunkingConfig):
+    """Los límites de ventana caen siempre en límites de párrafo original."""
+    parrafos = [f"Párrafo {i} con contenido suficiente para la prueba de ventanas." for i in range(15)]
+    secciones = [_sec("\n\n".join(parrafos), orden=0)]
+    chunks = ParagraphOverlapChunkingStrategy(segmenter).chunk(_doc(secciones), chunking_config_pequeno)
+
+    for chunk in chunks:
+        for parte in chunk.texto.split("\n\n"):
+            assert parte in parrafos, f"Fragmento ajeno a los párrafos originales: {parte!r}"
+
+
+def test_paragraph_overlap_seccion_atomica_un_chunk(segmenter: TextSegmenter, chunking_config_pequeno: ChunkingConfig):
+    """Las unidades atómicas nunca se ventanean ni se parten."""
+    fila_larga = "col1: " + " ".join(f"v{i}" for i in range(200)) + " col2: fin"
+    secciones = [_sec(fila_larga, orden=0, splittable=False)]
+    chunks = ParagraphOverlapChunkingStrategy(segmenter).chunk(_doc(secciones), chunking_config_pequeno)
+
+    assert len(chunks) == 1
+    assert "col1:" in chunks[0].texto and "col2: fin" in chunks[0].texto
+
+
+def test_paragraph_overlap_parrafo_que_excede_limite(segmenter: TextSegmenter, chunking_config_pequeno: ChunkingConfig):
+    """Un párrafo gigante se parte por tokens pero el resto sigue en ventanas."""
+    gigante = " ".join(f"palabra_{i}" for i in range(700)) + "."
+    texto = f"{gigante}\n\nPárrafo final corto."
+    secciones = [_sec(texto, orden=0)]
+    chunks = ParagraphOverlapChunkingStrategy(segmenter).chunk(_doc(secciones), chunking_config_pequeno)
+
+    assert len(chunks) >= 2
+    assert all(c.num_tokens <= chunking_config_pequeno.max_tokens for c in chunks)
+    reconstruido = " ".join(c.texto for c in chunks)
+    assert "palabra_0" in reconstruido and "palabra_699" in reconstruido
+    assert "Párrafo final corto." in reconstruido
+
+
+def test_paragraph_overlap_metadata(segmenter: TextSegmenter, chunking_config_pequeno: ChunkingConfig):
+    """Cada fragmento lleva la metadata base de la Tabla 1 con la estrategia correcta."""
+    secciones = [_sec(_muchos_parrafos(10), orden=0, titulo="Sección A")]
+    chunks = ParagraphOverlapChunkingStrategy(segmenter).chunk(_doc(secciones), chunking_config_pequeno)
+
+    assert len(chunks) >= 2
+    for i, c in enumerate(chunks):
+        assert c.chunk_id == f"doc_test__chunk_{i:05d}"
+        assert c.posicion == i
+        assert c.chunking_strategy == "paragraph_overlap"
+        assert c.seccion == "Sección A"
+        assert c.fuente == "prueba.md"
+        assert c.formato == "md"

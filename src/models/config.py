@@ -8,10 +8,16 @@ estrategia, etc.) se lee desde ``.env`` o variables de entorno reales.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Raíz del repositorio (src/models/ -> raíz) y archivos .env que se leen.
+# Se anclan al archivo (no al CWD) para que funcione desde cualquier directorio.
+_RUTA_PROYECTO = Path(__file__).resolve().parents[2]
+_ENV_FILES = (str(_RUTA_PROYECTO / ".env"), str(_RUTA_PROYECTO / "config" / ".env"))
 
 
 class ChunkingConfig(BaseModel):
@@ -54,7 +60,7 @@ class Settings(BaseSettings):
     overlap_size: int = int(os.getenv("OVERLAP_SIZE", "80"))
     min_chunk_tokens: int = int(os.getenv("MIN_CHUNK_TOKENS", "50"))
     max_tokens: int = int(os.getenv("MAX_TOKENS", "512"))
-    chunking_strategy: str = os.getenv("CHUNKING_STRATEGY", "hybrid")
+    chunking_strategy: str = os.getenv("CHUNKING_STRATEGY", "paragraph_overlap")
 
     # Tokenización y segmentación de oraciones
     tokenizer_model: str = os.getenv("TOKENIZER_MODEL", "google-bert/bert-base-multilingual-cased")
@@ -65,7 +71,7 @@ class Settings(BaseSettings):
     default_fuente: str = os.getenv("DEFAULT_FUENTE", "desconocida")
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=_ENV_FILES,  # config/.env gana; .env raíz como respaldo
         env_file_encoding="utf-8",
         extra="ignore",
     )

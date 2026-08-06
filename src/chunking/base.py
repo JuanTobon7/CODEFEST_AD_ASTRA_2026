@@ -9,6 +9,7 @@ dos colaboradores inyectados (inversión de dependencias):
 from __future__ import annotations
 
 import logging
+import re
 from abc import ABC, abstractmethod
 from typing import List, Tuple
 
@@ -52,6 +53,21 @@ class TextSegmenter:
         """Divide en oraciones completas (nunca corta una oración)."""
         return self.splitter.split(texto)
 
+    def split_parrafos(self, texto: str) -> List[str]:
+        """Divide en párrafos respetando los saltos de párrafo originales.
+
+        Un párrafo es un bloque separado por línea en blanco (``\\n\\n``), que
+        es la convención que dejan los extractores (PDF/JSON unen bloques con
+        ``\\n\\n``) y el cleaner (colapsa ``\\n{3,}`` a ``\\n\\n``). Los saltos
+        de línea simples se conservan DENTRO del párrafo (líneas envueltas).
+
+        Nunca fusiona párrafos ni parte uno por tamaño: es la unidad más
+        cercana a la estructura semántica del autor.
+        """
+        normalizado = texto.replace("\r\n", "\n").replace("\r", "\n")
+        parrafos = [p.strip() for p in re.split(r"\n\s*\n", normalizado)]
+        return [p for p in parrafos if p]
+
     def fin_oracion_mas_cercana(self, oraciones: List[str], presupuesto: int) -> int:
         """Índice de la última oración que cabe dentro del presupuesto de tokens.
 
@@ -74,19 +90,21 @@ class TextSegmenter:
         return max(ultimo_valido, 0)
 
     def ventanas_deslizantes(
-        self, oraciones: List[str], chunk_size: int, overlap_size: int
+        self, unidades: List[str], chunk_size: int, overlap_size: int
     ) -> List[Tuple[int, int]]:
-        """Calcula ventanas [ini, fin] (índices de oración) con solapamiento.
+        """Calcula ventanas [ini, fin] (índices de unidad) con solapamiento.
 
-        Tanto el inicio como el fin de cada ventana caen en límites de oración:
-        nunca se corta una oración. El solapamiento se cuantiza por oraciones
-        (aproximación por debajo de ``overlap_size`` tokens).
+        Acepta cualquier lista de unidades atómicas contables por tokens
+        (oraciones, párrafos, etc.): tanto el inicio como el fin de cada
+        ventana caen en límites de unidad (nunca se corta una). El
+        solapamiento se cuantiza por unidades (aproximación por debajo de
+        ``overlap_size`` tokens).
 
         Returns:
             Lista de tuplas (inicio_incluido, fin_incluido).
         """
         ventanas: List[Tuple[int, int]] = []
-        n = len(oraciones)
+        n = len(unidades)
         if n == 0:
             return ventanas
         idx = 0
@@ -95,18 +113,18 @@ class TextSegmenter:
             acumulado = 0
             fin = idx
             for j in range(idx, n):
-                costo = self.count_tokens(oraciones[j])
+                costo = self.count_tokens(unidades[j])
                 if acumulado + costo > presupuesto:
                     break
                 acumulado += costo
                 fin = j
             ventanas.append((idx, fin))
-            # Avance con solapamiento: retroceder oraciones hasta llenar el overlap.
+            # Avance con solapamiento: retroceder unidades hasta llenar el overlap.
             nuevo_idx = fin + 1
             acum_overlap = 0
             k = fin
             while k > idx and acum_overlap < overlap_size:
-                costo = self.count_tokens(oraciones[k])
+                costo = self.count_tokens(unidades[k])
                 if acum_overlap + costo > overlap_size:
                     break
                 acum_overlap += costo

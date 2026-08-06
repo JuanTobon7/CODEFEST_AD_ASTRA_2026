@@ -58,7 +58,9 @@ class HTMLExtractor(BaseExtractor):
             if encabezado_actual and not bloque_actual:
                 # Un encabezado sin contenido posterior aún así aporta texto.
                 bloque_actual.append(encabezado_actual)
-            texto_seccion = _normalizar_espacios(" ".join(bloque_actual))
+            # Cada <p>/<li> es un párrafo: se separan con línea en blanco
+            # (\n\n), la convención que espera el chunking por párrafo.
+            texto_seccion = _normalizar_espacios("\n\n".join(bloque_actual))
             if texto_seccion:
                 secciones.append(
                     Section(titulo=encabezado_actual, texto=texto_seccion, orden=orden, splittable=True)
@@ -92,7 +94,8 @@ class HTMLExtractor(BaseExtractor):
         cerrar_seccion()
 
         if not secciones:
-            cuerpo = sopa.get_text("\n", strip=True)
+            # Cada nodo de texto es un párrafo (línea en blanco entre ellos).
+            cuerpo = sopa.get_text("\n\n", strip=True)
             if cuerpo:
                 secciones.append(Section(texto=cuerpo, orden=0, splittable=True))
 

@@ -15,7 +15,7 @@ flowchart LR
     B --> C[BaseExtractor.extract]
     C --> D[ExtractedDocument<br/>secciones]
     D --> E[TextCleaner.clean]
-    E --> F[ChunkingStrategy.chunk<br/>structural | semantic | hybrid]
+    E --> F[ChunkingStrategy.chunk<br/>structural | semantic | hybrid |<br/>paragraph | paragraph_overlap]
     F --> G[MetadataBuilder.enrich<br/>campos Tabla 1]
     G --> H[ChunkValidator.validate]
     H -->|válidos| I[MongoChunkRepository.save_many<br/>upsert idempotente]
@@ -41,7 +41,7 @@ Extractor → Cleaner → ChunkingStrategy → MetadataBuilder → Validator →
 ```
 src/
  ├── extractors/     # BaseExtractor + 8 formatos (pdf, html, md/txt, json, csv/xlsx, image, pbf) + factory
- ├── chunking/       # ChunkingStrategy (ABC) + structural + semantic + hybrid + factory
+ ├── chunking/       # ChunkingStrategy (ABC) + structural + semantic + hybrid + paragraph + paragraph_overlap + factory
  ├── cleaning/       # TextCleaner (UTF-8, controles, boilerplate, idioma)
  ├── metadata/       # MetadataBuilder (campos obligatorios Tabla 1)
  ├── validation/     # ChunkValidator (duras → rechazo; blandas → warnings)
@@ -98,6 +98,16 @@ copy config\.env.example .env    # Windows
 Sin `.env` se usan valores por defecto: `mongodb://localhost:27017`, BD
 `rag_corpus`, colección `chunks`, `chunk_size=400`, `overlap_size=80`,
 `min_chunk_tokens=50`, `max_tokens=512`, estrategia `hybrid`.
+
+Estrategias de chunking disponibles (`CHUNKING_STRATEGY`):
+
+| Nombre | Descripción |
+|---|---|
+| `structural` | Un chunk por sección estructural, sin subdivisiones |
+| `semantic` | Ventana deslizante por oraciones sobre todo el documento, con overlap |
+| `hybrid` | Estructural (fase 1) + ventana deslizante semántica con overlap (fase 2) |
+| `paragraph` | Un chunk por párrafo original (respeta los saltos de párrafo del autor) |
+| `paragraph_overlap` | Híbrida: agrupa párrafos consecutivos en ventanas de `chunk_size` tokens con `overlap_size` de solapamiento, sin partir nunca un párrafo |
 
 ---
 
@@ -181,7 +191,9 @@ python -m pytest tests -v
 Cubren: `ExtractorFactory` (+ extensión por decorador), extractores por
 formato con fixtures, `HybridChunkingStrategy` (secciones pequeñas, sección
 mayor a la ventana, oración que cruza el límite, unidades atómicas CSV/PBF,
-metadata), estrategias puras y `ChunkValidator` (duros y blandos).
+metadata), estrategias puras y por párrafo (`paragraph` respeta los saltos de
+párrafo; `paragraph_overlap` ventana deslizante sobre párrafos con solapamiento)
+y `ChunkValidator` (duros y blandos).
 
 ---
 

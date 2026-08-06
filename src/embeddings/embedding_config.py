@@ -5,9 +5,15 @@ Configuración del módulo de embeddings vía variables de entorno (Sección 5).
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import List, Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Raíz del repositorio (src/embeddings/ -> raíz) y archivos .env que se leen.
+# Se anclan al archivo (no al CWD) para que funcione desde cualquier directorio.
+_RUTA_PROYECTO = Path(__file__).resolve().parents[2]
+_ENV_FILES = (str(_RUTA_PROYECTO / ".env"), str(_RUTA_PROYECTO / "config" / ".env"))
 
 
 class EmbeddingConfig(BaseSettings):
@@ -41,7 +47,11 @@ class EmbeddingConfig(BaseSettings):
     working_index_dir: str = os.getenv("WORKING_INDEX_DIR", "working_index")
     delivery_output_dir: str = os.getenv("DELIVERY_OUTPUT_DIR", "base_vectorial")
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=_ENV_FILES,  # config/.env gana; .env raíz como respaldo
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     @property
     def encoder_names(self) -> List[str]:
