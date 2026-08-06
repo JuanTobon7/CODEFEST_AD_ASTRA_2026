@@ -31,7 +31,7 @@ class ChunkingConfig(BaseModel):
     """
 
     chunk_size: int = int(os.getenv("CHUNK_SIZE", "400"))
-    overlap_size: int = int(os.getenv("OVERLAP_SIZE", "80"))
+    overlap_size: int = int(os.getenv("OVERLAP_SIZE", "100"))
     min_chunk_tokens: int = int(os.getenv("MIN_CHUNK_TOKENS", "50"))
     max_tokens: int = int(os.getenv("MAX_TOKENS", "512"))
 

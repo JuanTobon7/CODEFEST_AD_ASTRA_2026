@@ -119,6 +119,10 @@ class TextSegmenter:
                 acumulado += costo
                 fin = j
             ventanas.append((idx, fin))
+            if fin == n - 1:
+                # La ventana ya cubre el final: retroceder el solapamiento solo
+                # generaría ventanas degeneradas (subconjuntos de la última).
+                break
             # Avance con solapamiento: retroceder unidades hasta llenar el overlap.
             nuevo_idx = fin + 1
             acum_overlap = 0

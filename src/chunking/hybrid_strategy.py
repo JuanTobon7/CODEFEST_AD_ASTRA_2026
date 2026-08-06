@@ -17,7 +17,7 @@ y ``SemanticOverlapChunkingStrategy``.
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Tuple
 
 from src.chunking.base import ChunkingStrategy, TextSegmenter
 from src.models.chunk import Chunk
@@ -143,6 +143,7 @@ class HybridChunkingStrategy(ChunkingStrategy):
         ventanas = self.segmenter.ventanas_deslizantes(
             oraciones, config.chunk_size, config.overlap_size
         )
+        ventanas = self._absorber_cola_corta(ventanas, oraciones, config)
         for posicion_local, (ini, fin) in enumerate(ventanas):
             texto_chunk = " ".join(oraciones[ini : fin + 1]).strip()
             overlap_con = None
@@ -152,6 +153,39 @@ class HybridChunkingStrategy(ChunkingStrategy):
                 extracted_doc, texto_chunk, config, chunks,
                 seccion=seccion.titulo, overlap_con=overlap_con,
             )
+
+    def _absorber_cola_corta(
+        self,
+        ventanas: List[Tuple[int, int]],
+        oraciones: List[str],
+        config: ChunkingConfig,
+    ) -> List[Tuple[int, int]]:
+        """Absorbe la última ventana si queda por debajo de ``min_chunk_tokens``.
+
+        ``min_chunk_tokens`` rige la fase 1 (fusión de secciones pequeñas); sin
+        este ajuste, la última ventana de la fase 2 (el sobrante de oraciones
+        que no llena ``chunk_size``) puede quedar muy por debajo del mínimo.
+        Si la cola final no alcanza ``min_chunk_tokens``, se incorpora a la
+        ventana anterior siempre que el resultado no exceda ``max_tokens``;
+        en caso contrario se conserva como está (no hay forma de respetar el
+        mínimo sin violar el límite del encoder).
+        """
+        if len(ventanas) < 2:
+            return ventanas
+        ini, fin = ventanas[-1]
+        if fin != len(oraciones) - 1:
+            return ventanas  # la última ventana ya termina en la última oración
+        tokens_cola = self.segmenter.count_tokens(" ".join(oraciones[ini : fin + 1]))
+        if tokens_cola >= config.min_chunk_tokens:
+            return ventanas
+        ini_prev, fin_prev = ventanas[-2]
+        tokens_prev = self.segmenter.count_tokens(
+            " ".join(oraciones[ini_prev : fin_prev + 1])
+        )
+        if tokens_prev + tokens_cola > config.max_tokens:
+            return ventanas  # absorberla superaría el límite del encoder
+        ventanas[-2] = (ini_prev, fin)  # la anterior ahora cubre hasta el final
+        return ventanas[:-1]
 
     # Utilidades ---------------------------------------------------------------
 

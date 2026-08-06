@@ -86,6 +86,63 @@ def test_hybrid_nunca_corta_una_oracion(segmenter: TextSegmenter, chunking_confi
         )
 
 
+def test_hybrid_cola_corta_se_absorbe_en_la_ventana_anterior(
+    segmenter: TextSegmenter, chunking_config_pequeno: ChunkingConfig
+):
+    """La última ventana por debajo de min_chunk_tokens se absorbe en la anterior.
+
+    El texto (20 oraciones de 6 tokens) deja un sobrante final de 4 oraciones
+    (24 tokens < min_chunk_tokens=25): sin la absorción serían 3 chunks, con
+    ella quedan 2 y ningún fragmento baja del mínimo.
+    """
+    oraciones = [f"Oración {i} de ejemplo corta." for i in range(20)]
+    secciones = [_sec(" ".join(oraciones), orden=0)]
+    chunks = HybridChunkingStrategy(segmenter).chunk(_doc(secciones), chunking_config_pequeno)
+
+    assert len(chunks) == 2, "La cola corta debe incorporarse a la ventana anterior"
+    assert all(c.num_tokens >= chunking_config_pequeno.min_chunk_tokens for c in chunks), (
+        "Ningún chunk debe quedar por debajo de min_chunk_tokens"
+    )
+    assert "Oración 0 de ejemplo corta." in chunks[0].texto
+    assert "Oración 19 de ejemplo corta." in chunks[-1].texto  # cobertura completa
+    assert chunks[-1].overlap_con == chunks[0].chunk_id
+
+
+def test_hybrid_cola_corta_absorbe_si_cabe(segmenter: TextSegmenter):
+    """_absorber_cola_corta: fusiona la cola corta en la ventana anterior."""
+    config = ChunkingConfig(chunk_size=500, overlap_size=80, min_chunk_tokens=100, max_tokens=512)
+    estrategia = HybridChunkingStrategy(segmenter)
+    oraciones = [" ".join(f"p{i}" for i in range(200)) + ".", "Cola corta."]
+    ventanas = [(0, 0), (1, 1)]  # 201 tokens + 2 = 203 <= 512
+    assert estrategia._absorber_cola_corta(ventanas, oraciones, config) == [(0, 1)]
+
+
+def test_hybrid_cola_corta_no_se_absorbe_si_supera_max_tokens(segmenter: TextSegmenter):
+    """_absorber_cola_corta: si absorberla supera max_tokens, se conserva la cola."""
+    config = ChunkingConfig(chunk_size=500, overlap_size=80, min_chunk_tokens=100, max_tokens=512)
+    estrategia = HybridChunkingStrategy(segmenter)
+    oraciones = [" ".join(f"p{i}" for i in range(520)) + ".", "Cola corta."]
+    ventanas = [(0, 0), (1, 1)]  # 521 tokens + 2 = 523 > 512
+    assert estrategia._absorber_cola_corta(ventanas, oraciones, config) == [(0, 0), (1, 1)]
+
+
+def test_hybrid_cola_corta_solo_absorbe_la_ultima_ventana(segmenter: TextSegmenter):
+    """_absorber_cola_corta: solo toca la última ventana y solo si llega al final."""
+    config = ChunkingConfig(chunk_size=500, overlap_size=80, min_chunk_tokens=100, max_tokens=512)
+    estrategia = HybridChunkingStrategy(segmenter)
+    oraciones = [
+        " ".join(f"p{i}" for i in range(200)) + ".",
+        "Cola corta.",
+        "Ultima oración de relleno.",
+        "Ultima oración de relleno dos.",
+    ]
+    ventanas = [(0, 0), (1, 1), (2, 2)]
+    # La última ventana no termina en la última oración -> intacta.
+    assert estrategia._absorber_cola_corta(ventanas, oraciones, config) == ventanas
+    # Con una sola ventana -> intacta.
+    assert estrategia._absorber_cola_corta([(0, 1)], oraciones, config) == [(0, 1)]
+
+
 def test_hybrid_oracion_que_cruza_la_ventana(segmenter: TextSegmenter, chunking_config_pequeno: ChunkingConfig):
     """Si una oración cruza la ventana, se toma completa aunque exceda el tamaño."""
     oracion_gigante = " ".join(f"palabra_{i}" for i in range(150)) + "."
