@@ -60,6 +60,20 @@ def _hash_texto(chunk: Chunk) -> str:
     return chunk.hash_texto or hashlib.sha256(chunk.texto.encode("utf-8")).hexdigest()
 
 
+def _por_fenomeno(chunks: List[Chunk]) -> Dict[int, int]:
+    """Cuenta chunks por fenómeno (1, 2, 3) para el log de trazabilidad."""
+    conteo: Dict[int, int] = {1: 0, 2: 0, 3: 0}
+    for chunk in chunks:
+        conteo[chunk.fenomeno] = conteo.get(chunk.fenomeno, 0) + 1
+    return dict(sorted(conteo.items()))
+
+
+def _log_fenomenos(titulo: str, conteo: Dict[int, int]) -> None:
+    """Registra la distribución por fenómeno en una sola línea legible."""
+    detalle = ", ".join(f"F{f}={conteo[f]}" for f in sorted(conteo))
+    logger.info("FENÓMENOS | %s: %s", titulo, detalle)
+
+
 def _construir_registros_embedding(
     resultado: EncoderRunResult, chunks_por_id: dict, chunk_id_to_hash: dict
 ) -> List[EmbeddingRecord]:
@@ -168,8 +182,17 @@ def main(argv: Optional[List[str]] = None) -> int:
             if not chunks_a_codificar:
                 logger.info("Encoder '%s': todos los chunks ya estaban en cache, se omite.", nombre)
                 continue
+            _log_fenomenos(
+                f"encoder '{nombre}' | chunks pendientes de codificar",
+                _por_fenomeno(chunks_a_codificar),
+            )
 
             resultado = orquestador.run(chunks_a_codificar)[nombre]
+            if resultado.chunks_excluidos:
+                _log_fenomenos(
+                    f"encoder '{nombre}' | chunks EXCLUIDOS por límite de tokens",
+                    _por_fenomeno([chunks_por_id[cid] for cid in resultado.chunks_excluidos]),
+                )
             if resultado.chunk_ids:
                 escritor.write(resultado)
                 repositorio_vectores.save_many(
@@ -178,6 +201,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 cache.marcar_procesados(nombre, {cid: chunk_id_to_hash[cid] for cid in resultado.chunk_ids})
                 for chunk_id in resultado.chunk_ids:
                     repositorio_chunks.mark_encoder_procesado(chunk_id, nombre)
+                _log_fenomenos(
+                    f"encoder '{nombre}' | embeddings generados y persistidos",
+                    _por_fenomeno([chunks_por_id[cid] for cid in resultado.chunk_ids]),
+                )
 
         return 0
     finally:

@@ -27,6 +27,12 @@ class BatchSummary(BaseModel):
     ok: int = Field(default=0, description="Archivos con status 'ok'")
     error: int = Field(default=0, description="Archivos con status 'error'")
     chunks_guardados: int = Field(default=0, description="Fragmentos persistidos")
+    archivos_por_fenomeno: Dict[int, int] = Field(
+        default_factory=dict, description="Archivos procesados por fenómeno (1, 2, 3)"
+    )
+    chunks_por_fenomeno: Dict[int, int] = Field(
+        default_factory=dict, description="Fragmentos persistidos por fenómeno (1, 2, 3)"
+    )
     errores: List[str] = Field(
         default_factory=list, description="Líneas 'fuente | motivo' de cada error"
     )
@@ -39,11 +45,21 @@ class BatchSummary(BaseModel):
         """Agrega los resultados individuales del lote."""
         ok = [r for r in resultados if r.status == "ok"]
         error = [r for r in resultados if r.status == "error"]
+        archivos_por_fenomeno: Dict[int, int] = defaultdict(int)
+        chunks_por_fenomeno: Dict[int, int] = defaultdict(int)
+        for resultado in resultados:
+            if resultado.fenomeno is None:
+                continue
+            archivos_por_fenomeno[resultado.fenomeno] += 1
+            if resultado.status == "ok":
+                chunks_por_fenomeno[resultado.fenomeno] += resultado.num_guardados
         return cls(
             total=len(resultados),
             ok=len(ok),
             error=len(error),
             chunks_guardados=sum(r.num_guardados for r in ok),
+            archivos_por_fenomeno=dict(sorted(archivos_por_fenomeno.items())),
+            chunks_por_fenomeno=dict(sorted(chunks_por_fenomeno.items())),
             errores=[
                 f"{r.fuente} | {'; '.join(r.errores)}" for r in error if r.errores
             ],
@@ -61,6 +77,16 @@ class BatchSummary(BaseModel):
             self.error,
             self.chunks_guardados,
         )
+        if self.archivos_por_fenomeno or self.chunks_por_fenomeno:
+            archivos = ", ".join(
+                f"F{fenomeno}={n}"
+                for fenomeno, n in sorted(self.archivos_por_fenomeno.items())
+            )
+            chunks = ", ".join(
+                f"F{fenomeno}={n}"
+                for fenomeno, n in sorted(self.chunks_por_fenomeno.items())
+            )
+            logger.info("FENÓMENOS | archivos: %s | chunks: %s", archivos, chunks)
         for error_linea in self.errores:
             logger.warning("  ERROR  | %s", error_linea)
 

@@ -12,8 +12,9 @@ resumen y el proceso continúa.
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from src.chunking.base import TextSegmenter
 from src.chunking.factory import ChunkingStrategyFactory
@@ -101,6 +102,46 @@ class BatchIngestor:
         )
         return pipeline, repositorio
 
+    @staticmethod
+    def _repartir_por_fenomeno(
+        archivos: List[Path],
+        limite: int,
+        fenomeno_de: Callable[[Path], int],
+    ) -> List[Path]:
+        """Reparte ``limite`` archivos equitativamente entre los fenómenos.
+
+        ``archivos[:limite]`` tomaría los primeros N en orden alfabético
+        (F1_ < F2_ < F3_), dejando casi solo archivos de F1 cuando hay
+        límite. Aquí se agrupa por fenómeno y se toma una cuota de cada uno
+        (``limite // n``, residuo uno a cada uno de los primeros), igual que
+        ``MongoChunkRepository.find_all_balanceado`` hace para chunks.
+
+        Args:
+            archivos: Lista de archivos escaneados (orden estable).
+            limite: Máximo de archivos a devolver (0 o > len = sin recorte).
+            fenomeno_de: Resolver fenómeno (1, 2 o 3) de un archivo.
+        """
+        if limite <= 0 or len(archivos) <= limite:
+            return archivos
+        por_fenomeno: Dict[int, List[Path]] = defaultdict(list)
+        for archivo in archivos:
+            por_fenomeno[fenomeno_de(archivo)].append(archivo)
+        n_fenomenos = len(por_fenomeno)
+        cuota, residuo = divmod(limite, n_fenomenos)
+        seleccionados: List[Path] = []
+        for i, (fenomeno, lista) in enumerate(sorted(por_fenomeno.items())):
+            tope = cuota + (1 if i < residuo else 0)
+            seleccionados.extend(lista[:tope])
+        return seleccionados
+
+    def _log_fenomenos(self, archivos: List[Path], por_defecto: int, etiqueta: str) -> None:
+        """Log de trazabilidad: distribución de archivos por fenómeno (por número)."""
+        conteo: Dict[int, int] = defaultdict(int)
+        for archivo in archivos:
+            conteo[self._corpus_service.determine_fenomeno(archivo, por_defecto)] += 1
+        detalle = ", ".join(f"F{f}={conteo[f]}" for f in sorted(conteo))
+        logger.info("FENÓMENOS | %s: %s (%d archivos)", etiqueta, detalle, len(archivos))
+
     # Orquestación del lote ------------------------------------------------------
 
     def run(
@@ -120,11 +161,20 @@ class BatchIngestor:
             :class:`BatchSummary` con conteos y errores por archivo.
         """
         archivos = self._corpus_service.scan(extensiones)
-        if limite > 0:
-            archivos = archivos[:limite]
+        self._log_fenomenos(archivos, por_defecto, "corpus escaneado")
+        archivos = self._repartir_por_fenomeno(
+            archivos,
+            limite,
+            lambda fp: self._corpus_service.determine_fenomeno(fp, por_defecto),
+        )
         if not archivos:
             logger.error("No hay archivos para procesar en %s", self._corpus_service.corpus)
             return BatchSummary(total=0, ok=0, error=0, chunks_guardados=0)
+        self._log_fenomenos(
+            archivos,
+            por_defecto,
+            f"lote a procesar (límite={limite})" if limite > 0 else "lote a procesar (completo)",
+        )
 
         self._repository.connect()
         resultados: List[IngestionResult] = []
@@ -136,7 +186,10 @@ class BatchIngestor:
                 except Exception as exc:  # noqa: BLE001 - el lote continúa
                     logger.exception("Fallo al procesar %s", filepath)
                     resultado = IngestionResult(
-                        fuente=filepath.name, status="error", errores=[str(exc)]
+                        fuente=filepath.name,
+                        fenomeno=fenomeno,
+                        status="error",
+                        errores=[str(exc)],
                     )
                 resultados.append(resultado)
         finally:
