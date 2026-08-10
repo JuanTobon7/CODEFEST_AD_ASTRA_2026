@@ -14,6 +14,11 @@ Es determinístico: correr ``export_encoder`` dos veces sobre los mismos
 datos de MongoDB debe producir un ``index.faiss``/``metadata.jsonl``
 idénticos (mismo orden — ``ORDER BY doc_id, posicion``, nunca ``_id`` de
 Mongo, que no es reproducible entre corridas).
+
+Con ``permitir_faltantes=True`` (flag ``--parcial`` de
+``run_export_delivery``) construye el índice con los embeddings disponibles,
+omitiendo los chunks sin vector: útil para validar el flujo con embeddings
+parciales; la entrega oficial sigue exigiendo el 100%.
 """
 
 from __future__ import annotations
@@ -95,22 +100,41 @@ class DeliveryExporter:
         index_strategy: FaissIndexBuilderStrategy,
         embedding_dim: int,
         config: IndexBuildConfig,
+        permitir_faltantes: bool = False,
     ) -> ExportResult:
         """Exporta el índice + metadata de entrega de ``encoder_name``.
 
+        Args:
+            encoder_name: Nombre del encoder (carpeta ``encoder_<nombre>``).
+            chunks_activos: Chunks actuales de la colección (con metadata).
+            index_strategy: Estrategia FAISS (flat_ip | ivf_flat | hnsw).
+            embedding_dim: Dimensión esperada de los vectores.
+            config: Parámetros de construcción del índice.
+            permitir_faltantes: Si ``True``, construye el índice con los
+                embeddings disponibles y omite (con warning) los chunks que
+                aún no tienen vector, en lugar de abortar. Útil para validar
+                el flujo con embeddings parciales (p. ej. ``--limite N``);
+                la entrega oficial sigue exigiendo el 100%.
+
         Raises:
-            ExportError: si faltan embeddings para algún chunk activo, o si
-                hay vectores con dimensión inconsistente.
+            ExportError: si faltan embeddings (y ``permitir_faltantes`` es
+                ``False``), o si hay vectores con dimensión inconsistente.
         """
         chunk_ids_totales = self._ordenar_chunk_ids(chunks_activos)
         registros_por_id = {r.chunk_id: r for r in self.vector_repository.find_by_encoder(encoder_name)}
 
         faltantes = self._chunk_ids_faltantes(chunk_ids_totales, registros_por_id)
         if faltantes:
-            raise ExportError(
-                f"Encoder '{encoder_name}': faltan embeddings para {len(faltantes)} chunk(s): "
-                f"{faltantes[:20]}{'...' if len(faltantes) > 20 else ''}"
+            if not permitir_faltantes:
+                raise ExportError(
+                    f"Encoder '{encoder_name}': faltan embeddings para {len(faltantes)} chunk(s): "
+                    f"{faltantes[:20]}{'...' if len(faltantes) > 20 else ''}"
+                )
+            logger.warning(
+                "Encoder '%s': %d chunk(s) sin embedding se omiten del índice (modo parcial)",
+                encoder_name, len(faltantes),
             )
+            chunk_ids_totales = [cid for cid in chunk_ids_totales if cid in registros_por_id]
         self._validar_dimension_uniforme(registros_por_id, embedding_dim, encoder_name)
 
         vectores = np.vstack(
@@ -150,7 +174,11 @@ class DeliveryExporter:
 
         self._verificar_integridad(ruta_index, ruta_metadata, embedding_dim, len(chunk_ids_totales))
         checksum = self._checksum_archivo(ruta_index)
-        self._registrar_build_log(carpeta, encoder_name, index_strategy.index_type_name, len(chunk_ids_totales), checksum)
+        self._registrar_build_log(
+            carpeta, encoder_name, index_strategy.index_type_name,
+            len(chunk_ids_totales), checksum,
+            n_omitidos=len(faltantes) if permitir_faltantes else 0,
+        )
 
         logger.info(
             "Encoder '%s': exportado index.faiss + metadata.jsonl (%d vectores) en %s",
@@ -179,7 +207,10 @@ class DeliveryExporter:
             raise ExportError(f"metadata.jsonl tiene {n_lineas} líneas, se esperaban {n_esperado}")
 
     @staticmethod
-    def _registrar_build_log(carpeta: Path, encoder_name: str, index_type: str, n_vectores: int, checksum: str) -> None:
+    def _registrar_build_log(
+        carpeta: Path, encoder_name: str, index_type: str, n_vectores: int, checksum: str,
+        n_omitidos: int = 0,
+    ) -> None:
         """Añade una entrada al log de builds (trazabilidad/reproducibilidad)."""
         entrada = {
             "encoder_name": encoder_name,
@@ -188,5 +219,8 @@ class DeliveryExporter:
             "checksum_sha256": checksum,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+        if n_omitidos:
+            entrada["parcial"] = True
+            entrada["chunks_omitidos"] = n_omitidos
         with open(carpeta / "build_log.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps(entrada, ensure_ascii=False) + "\n")

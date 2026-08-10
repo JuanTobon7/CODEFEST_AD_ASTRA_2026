@@ -1,8 +1,9 @@
 """
 Tests: ``DeliveryExporter`` (modo de exportación estricta) — valida chunks
-faltantes, dimensión uniforme, y reproducibilidad exacta (correr el export
+faltantes, dimensión uniforme, reproducibilidad exacta (correr el export
 dos veces sobre los mismos datos produce ``index.faiss``/``metadata.jsonl``
-idénticos).
+idénticos) y el modo parcial (``permitir_faltantes``: índice con los
+embeddings disponibles).
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import json
 from typing import Dict, Iterator, List
 
+import faiss
 import numpy as np
 import pytest
 
@@ -106,3 +108,28 @@ def test_export_es_reproducible_entre_corridas(tmp_path):
     r2 = exportador.export_encoder("e5-fake", chunks, FlatIPIndexStrategy(), 4, IndexBuildConfig())
 
     assert r1.checksum_sha256 == r2.checksum_sha256
+
+
+def test_export_parcial_omite_chunks_sin_embedding(tmp_path):
+    """Modo parcial: construye el índice solo con los embeddings disponibles."""
+    chunks = [_chunk("c1", "doc-1", 0), _chunk("c2", "doc-1", 1), _chunk("c3", "doc-1", 2)]
+    repo = _FakeVectorRepository([_registro("c1"), _registro("c3")])  # falta c2
+    exportador = DeliveryExporter(repo, tmp_path)
+
+    resultado = exportador.export_encoder(
+        "e5-fake", chunks, FlatIPIndexStrategy(), 4, IndexBuildConfig(), permitir_faltantes=True
+    )
+
+    assert resultado.n_vectores == 2
+    ruta_carpeta = tmp_path / "encoder_e5-fake"
+    lineas = (ruta_carpeta / "metadata.jsonl").read_text(encoding="utf-8").splitlines()
+    ids = [json.loads(l)["chunk_id"] for l in lineas]
+    assert ids == ["c1", "c3"]  # orden (doc_id, posicion), sin el omitido
+    # El índice recién escrito cuadra con la metadata (ID interno = ordinal de línea).
+    indice = faiss.read_index(str(ruta_carpeta / "index.faiss"))
+    assert indice.ntotal == 2
+    assert indice.d == 4
+    # El build_log deja trazabilidad del modo parcial.
+    entradas = [json.loads(l) for l in (ruta_carpeta / "build_log.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert entradas[-1]["parcial"] is True
+    assert entradas[-1]["chunks_omitidos"] == 1

@@ -50,6 +50,14 @@ def _parser() -> argparse.ArgumentParser:
         "--encoder", action="append", default=None,
         help="Nombre de encoder a exportar (repetible). Por defecto: ACTIVE_ENCODERS del .env",
     )
+    parser.add_argument(
+        "--parcial", action="store_true",
+        help=(
+            "Construye el índice con los embeddings disponibles, omitiendo "
+            "(con warning) los chunks que aún no tienen vector. La entrega "
+            "oficial sigue exigiendo el 100%."
+        ),
+    )
     parser.add_argument("--verbose", action="store_true", help="Logging en nivel DEBUG")
     return parser
 
@@ -100,7 +108,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 continue
             try:
                 exportador.export_encoder(
-                    nombre, chunks_activos, estrategia_indice, primer_registro.embedding_dim, index_cfg
+                    nombre, chunks_activos, estrategia_indice, primer_registro.embedding_dim, index_cfg,
+                    permitir_faltantes=args.parcial,
                 )
             except ExportError as exc:
                 logger.error("Encoder '%s': fallo en la exportación: %s", nombre, exc)
