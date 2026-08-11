@@ -15,6 +15,7 @@ import re
 from typing import Dict, List, Sequence, Tuple
 
 from src.knowledge_graph.extract.base import RelationExtractor, normalizar_id_entidad
+from src.knowledge_graph.extract.entity_matchers import formas_buscables, mencionada
 from src.knowledge_graph.extract.factory import RelationExtractorFactory
 from src.knowledge_graph.models import Entity, Relation, RelationType
 
@@ -80,14 +81,14 @@ class CooccurrenceRelationExtractor(RelationExtractor):
         if not texto or len(entidades) < 2:
             return []
 
-        formas = self._formas_buscables(entidades)
+        formas = formas_buscables(entidades)
         oraciones = _REGEX_ORACIONES.split(_ESPACIO.sub(" ", texto.strip()))
         mejores: Dict[Tuple[str, RelationType, str], float] = {}
 
         for oracion in oraciones:
             noracion = _ESPACIO.sub(" ", normalizar_id_entidad(oracion))
             presentes = [
-                eid for eid, patrones in formas.items() if self._mencionada(noracion, patrones)
+                eid for eid, patrones in formas.items() if mencionada(noracion, patrones)
             ]
             if len(presentes) < 2:
                 continue
@@ -119,27 +120,6 @@ class CooccurrenceRelationExtractor(RelationExtractor):
                     mejores[clave] = max(mejores.get(clave, 0.0), confianza)
 
     # -- Helpers ------------------------------------------------------------
-
-    @staticmethod
-    def _formas_buscables(
-        entidades: Sequence[Entity],
-    ) -> Dict[str, List[re.Pattern[str]]]:
-        """Patrones por id de entidad: sus formas léxicas normalizadas."""
-        formas: Dict[str, List[re.Pattern[str]]] = {}
-        for e in entidades:
-            variantes = {e.nombre, *e.variantes, e.id}
-            patrones = [
-                re.compile(rf"(?<!\w){re.escape(_ESPACIO.sub(' ', normalizar_id_entidad(v)))}(?!\w)")
-                for v in variantes
-                if v.strip()
-            ]
-            formas[e.id] = patrones
-        return formas
-
-    @staticmethod
-    def _mencionada(oracion_normalizada: str, patrones: List[re.Pattern[str]]) -> bool:
-        """True si la oración normalizada menciona la entidad."""
-        return any(p.search(oracion_normalizada) is not None for p in patrones)
 
     @classmethod
     def _tipo_de_oracion(cls, oracion_normalizada: str) -> RelationType:

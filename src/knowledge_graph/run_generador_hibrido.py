@@ -32,11 +32,18 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.knowledge_graph.models import Query, ScoredChunk
 from src.knowledge_graph.retrieval.adapters import GraphIndexAdapter
 from src.knowledge_graph.retrieval.base import FusionStrategy, Retriever
+from src.knowledge_graph.extract.factory import RelationExtractorFactory
+
+# Importar las estrategias RE registra sus decoradores en RelationExtractorFactory
+# (mrebel es el default del CLI; el service por defecto sigue siendo
+# coocurrencia-oracional, sin LLM).
+import src.knowledge_graph.extract.nli_relation_strategy  # noqa: F401
+import src.knowledge_graph.extract.mrebel_relation_strategy  # noqa: F401
 from src.knowledge_graph.retrieval.fusion import (
     CombMNZFusionStrategy,
     CombSUMFusionStrategy,
@@ -168,6 +175,35 @@ def recuperar_hibrido(
     return resultado.as_dict(), fusionados
 
 
+def _construir_canales(args) -> Tuple[List[Retriever], GraphIndexAdapter]:
+    """Carga los canales vectoriales y el canal de grafo (con la RE elegida)."""
+    canales = _cargar_canales_vectoriales(Path(args.encoders_dir))
+    canal_grafo = _cargar_canal_grafo(
+        Path(args.encoders_dir),
+        args.limite_grafo,
+        Path(args.cargar_grafo) if args.cargar_grafo else None,
+        RelationExtractorFactory.create(args.re),
+    )
+    return canales, canal_grafo
+
+
+def _construir_siguiente_chunk(base_dir: Path) -> Optional[Any]:
+    """Lookup 'siguiente chunk del mismo doc' (split/merge) del primer encoder."""
+    from src.embeddings.embedding_config import EmbeddingConfig
+
+    config = EmbeddingConfig()
+    for nombre in config.encoder_names:
+        ruta = base_dir / f"encoder_{nombre}" / "metadata.jsonl"
+        if ruta.exists():
+            lineas = []
+            with ruta.open(encoding="utf-8") as fh:
+                for linea in fh:
+                    if linea.strip():
+                        lineas.append(json.loads(linea))
+            return build_siguiente_chunk_lookup({nombre: lineas})
+    return None
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Generador de resultados con recuperación híbrida FAISS + grafo (Sección 9)")
     parser.add_argument("--queries", default="consultas.jsonl", help="Archivo .jsonl de consultas (q001..q050)")
@@ -176,6 +212,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--encoders-dir", default="base_vectorial", help="Directorio de artefactos de entrega")
     parser.add_argument("--cargar-grafo", default=None, help="Ruta de un grafo.graphml ya exportado (evita reconstruir)")
     parser.add_argument("--limite-grafo", type=int, default=None, help="Máximo de chunks para el grafo (default: todos)")
+    parser.add_argument(
+        "--re",
+        default="mrebel",
+        choices=["coocurrencia-oracional", "nli-zero-shot", "mrebel"],
+        help="Estrategia RE para construir el grafo (default: mrebel, seq2seq multilingüe)",
+    )
     parser.add_argument("--k-search", type=int, default=50, help="Top-k por canal antes de fusionar")
     parser.add_argument("--k0", type=int, default=60, help="Constante RRF (solo fusion rrf)")
     parser.add_argument("--fusion", default="rrf", choices=sorted(FUSIONES), help="Estrategia de fusión")
@@ -190,12 +232,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         fusion = FUSIONES[args.fusion]()
 
     try:
-        canales = _cargar_canales_vectoriales(Path(args.encoders_dir))
-        canal_grafo = _cargar_canal_grafo(
-            Path(args.encoders_dir),
-            args.limite_grafo,
-            Path(args.cargar_grafo) if args.cargar_grafo else None,
-        )
+        canales, canal_grafo = _construir_canales(args)
     except Exception as exc:  # noqa: BLE001 - error de arranque
         logger.exception("%s", exc)
         return 1
@@ -204,20 +241,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Lookup del "siguiente chunk" del mismo doc (para split/merge de la
     # Sección 9.2.1) sobre la metadata del primer encoder con artefacto.
-    from src.embeddings.embedding_config import EmbeddingConfig
-
-    siguiente_chunk = None
-    config = EmbeddingConfig()
-    for nombre in config.encoder_names:
-        ruta = Path(args.encoders_dir) / f"encoder_{nombre}" / "metadata.jsonl"
-        if ruta.exists():
-            lineas = []
-            with ruta.open(encoding="utf-8") as fh:
-                for linea in fh:
-                    if linea.strip():
-                        lineas.append(json.loads(linea))
-            siguiente_chunk = build_siguiente_chunk_lookup({nombre: lineas})
-            break
+    siguiente_chunk = _construir_siguiente_chunk(Path(args.encoders_dir))
     if siguiente_chunk is None:
         logger.error("No hay metadata.jsonl en '%s' para el split/merge", args.encoders_dir)
         return 1

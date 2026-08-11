@@ -19,7 +19,7 @@ _ENV_FILES = (str(_RUTA_PROYECTO / ".env"), str(_RUTA_PROYECTO / "config" / ".en
 class EmbeddingConfig(BaseSettings):
     """Configuración externa de la etapa de codificación semántica."""
 
-    active_encoders: str = os.getenv("ACTIVE_ENCODERS", "bert-multilingual,e5-multilingual-base,e5-multilingual-small")
+    active_encoders: str = os.getenv("ACTIVE_ENCODERS", "e5-multilingual-base")
     embedding_batch_size: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
     # Overrides opcionales por encoder, p. ej. "bert-large=8,e5-multilingual-small=64"
     # (no todos los checkpoints caben igual de bien en la misma VRAM).

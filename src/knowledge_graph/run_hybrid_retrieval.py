@@ -44,9 +44,16 @@ from src.knowledge_graph.retrieval.fusion import (
     RRFusionStrategy,
 )
 from src.knowledge_graph.retrieval.orchestrator import RetrievalOrchestrator
+from src.knowledge_graph.extract.factory import RelationExtractorFactory
 from src.knowledge_graph.service import KnowledgeGraphService
 from src.knowledge_graph.run_build_graph import ChunkMetadata
 from src.retrieval.index_loader import ArtifactosFaltantesError, load_encoder_artifacts
+
+# Importar las estrategias RE registra sus decoradores en RelationExtractorFactory
+# (mrebel es el default del CLI; el service por defecto sigue siendo
+# coocurrencia-oracional, sin LLM).
+import src.knowledge_graph.extract.nli_relation_strategy  # noqa: F401
+import src.knowledge_graph.extract.mrebel_relation_strategy  # noqa: F401
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("run_hybrid_retrieval")
@@ -105,6 +112,7 @@ def _cargar_canal_grafo(
     base_dir: Path,
     limite: Optional[int],
     grafo_graphml: Optional[Path] = None,
+    relation_extractor=None,
 ) -> GraphIndexAdapter:
     """Construye/carga el grafo alineado con los chunks de los artefactos.
 
@@ -112,9 +120,10 @@ def _cargar_canal_grafo(
     disponible (todos comparten los mismos ``chunk_id``; solo difieren los
     vectores), de modo que el grafo queda alineado con el índice FAISS por
     construcción. Si se pasa ``grafo_graphml``, se carga el archivo ya
-    exportado (más rápido, misma alineación).
+    exportado (más rápido, misma alineación). ``relation_extractor`` solo
+    se usa al CONSTRUIR (no al cargar desde GraphML).
     """
-    servicio = KnowledgeGraphService()
+    servicio = KnowledgeGraphService(relation_extractor=relation_extractor)
     if grafo_graphml is not None and grafo_graphml.exists():
         logger.info("Cargando grafo desde '%s'", grafo_graphml)
         from src.knowledge_graph.graph.inmemory_repository import GraphMLFileRepository
@@ -199,6 +208,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--k0", type=int, default=60, help="Constante RRF (solo fusion rrf)")
     parser.add_argument("--fusion", default="rrf", choices=sorted(FUSIONES), help="Estrategia de fusión")
     parser.add_argument("--limite-grafo", type=int, default=None, help="Máximo de chunks para el grafo (default: todos)")
+    parser.add_argument(
+        "--re",
+        default="mrebel",
+        choices=["coocurrencia-oracional", "nli-zero-shot", "mrebel"],
+        help="Estrategia RE para construir el grafo (default: mrebel, seq2seq multilingüe)",
+    )
     parser.add_argument("--cargar-grafo", default=None, help="Ruta de un grafo.graphml ya exportado (evita reconstruir)")
     parser.add_argument("--output-caminos", default=None, help="JSON de salida con el camino por el grafo por consulta")
     parser.add_argument("--max-tripletas", type=int, default=100, help="Tope de tripletas por camino (default: 100)")
@@ -225,7 +240,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         canales = _cargar_canales_vectoriales(Path(args.encoders_dir))
         canal_grafo = _cargar_canal_grafo(
-            Path(args.encoders_dir), args.limite_grafo, Path(args.cargar_grafo) if args.cargar_grafo else None
+            Path(args.encoders_dir), args.limite_grafo,
+            Path(args.cargar_grafo) if args.cargar_grafo else None,
+            RelationExtractorFactory.create(args.re),
         )
         canales.append(canal_grafo)
     except ArtifactosFaltantesError as exc:

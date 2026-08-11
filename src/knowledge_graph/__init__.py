@@ -24,6 +24,8 @@ from src.knowledge_graph.extract.factory import (
     EntityExtractorFactory,
     RelationExtractorFactory,
 )
+from src.knowledge_graph.extract.mrebel_relation_strategy import MrebelRelationExtractor
+from src.knowledge_graph.extract.nli_relation_strategy import NLIRelationExtractor
 from src.knowledge_graph.extract.pipeline import ExtractionPipeline
 from src.knowledge_graph.extract.regex_entity_strategy import RegexEntityExtractor
 from src.knowledge_graph.graph.knowledge_graph import KnowledgeGraph
@@ -81,6 +83,8 @@ __all__ = [
     "KnowledgeGraphBuilder",
     "KnowledgeGraphQuery",
     "KnowledgeGraphService",
+    "MrebelRelationExtractor",
+    "NLIRelationExtractor",
     "Query",
     "RRFusionStrategy",
     "RegexEntityExtractor",

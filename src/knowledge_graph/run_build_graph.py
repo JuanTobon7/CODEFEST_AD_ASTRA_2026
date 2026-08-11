@@ -21,7 +21,14 @@ from pathlib import Path
 from typing import Iterable, List
 
 from src.embeddings.embedding_config import EmbeddingConfig
+from src.knowledge_graph.extract.factory import RelationExtractorFactory
 from src.knowledge_graph.service import KnowledgeGraphService
+
+# Importar las estrategias RE registra sus decoradores en RelationExtractorFactory
+# (mrebel es el default del CLI; el service por defecto sigue siendo
+# coocurrencia-oracional, sin LLM).
+import src.knowledge_graph.extract.nli_relation_strategy  # noqa: F401
+import src.knowledge_graph.extract.mrebel_relation_strategy  # noqa: F401
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("run_build_graph")
@@ -85,11 +92,19 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--output", default="grafo.graphml", help="Archivo GraphML de salida")
     parser.add_argument("--encoder", default=None, help="Nombre del encoder cuyo metadata leer (default: el primero activo)")
     parser.add_argument("--limite", type=int, default=None, help="Máximo de chunks a procesar (default: todos)")
+    parser.add_argument(
+        "--re",
+        default="mrebel",
+        choices=["coocurrencia-oracional", "nli-zero-shot", "mrebel"],
+        help="Estrategia de extracción de relaciones (default: mrebel, seq2seq multilingüe)",
+    )
     args = parser.parse_args(argv)
 
     try:
         chunks = _leer_chunks(Path(args.encoders_dir), args.encoder, args.limite)
-        servicio = KnowledgeGraphService()
+        servicio = KnowledgeGraphService(
+            relation_extractor=RelationExtractorFactory.create(args.re)
+        )
         grafo = servicio.construir_desde_chunks(chunks)
         ruta = servicio.exportar_graphml(args.output)
     except FileNotFoundError as exc:

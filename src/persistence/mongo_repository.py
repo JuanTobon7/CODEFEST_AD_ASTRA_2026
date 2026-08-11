@@ -9,6 +9,8 @@ Repositorio MongoDB de fragmentos (pymongo).
 from __future__ import annotations
 
 import logging
+import re
+
 from typing import Dict, List, Optional
 
 from pymongo import ASCENDING, IndexModel, MongoClient, UpdateOne
@@ -144,13 +146,48 @@ class MongoChunkRepository(ChunkRepository):
             for fenomeno in range(1, n_fenomenos + 1)
         }
 
+    @staticmethod
+    def _subcarpeta_de(doc_id: str) -> str:
+        """Prefijo ``raiz\\subcarpeta`` del ``doc_id`` (primeros 2 componentes).
+
+        Acepta separadores ``\\`` (Windows) y ``/`` (POSIX). Si el ``doc_id``
+        no tiene ruta (p. ej. ``Indice_Datos_Codefest.xlsx``), devuelve el
+        ``doc_id`` completo: cada documento es su propia "subcarpeta".
+        """
+        for sep in ("\\", "/"):
+            if sep in doc_id:
+                partes = doc_id.split(sep)
+                return sep.join(partes[:2])
+        return doc_id
+
+    @staticmethod
+    def _cuotas_por_subcarpeta(limite: int, subcarpetas: List[str]) -> Dict[str, int]:
+        """Reparte ``limite`` entre ``subcarpetas`` (determinista).
+
+        Cuota base = ``limite // n``; el residuo se asigna uno a cada una de
+        las primeras subcarpetas en orden alfabético. Con ``limite <= 0`` o
+        sin subcarpetas devuelve ``{}``.
+        """
+        if limite <= 0 or not subcarpetas:
+            return {}
+        n = len(subcarpetas)
+        cuota = limite // n
+        residuo = limite % n
+        return {
+            sub: cuota + (1 if i < residuo else 0)
+            for i, sub in enumerate(sorted(subcarpetas))
+        }
+
     def find_all_balanceado(self, limite: int, n_fenomenos: int = 3) -> List[Chunk]:
         """Recupera hasta ``limite`` chunks repartidos equitativamente entre los
         ``n_fenomenos`` fenómenos (p. ej. 1000 -> ~333 por fenómeno).
 
-        Determinista: cada fenómeno se consulta por separado, ordenado por
-        ``chunk_id``, con su cuota (:meth:`_cuotas_por_fenomeno`). Con
-        ``limite <= 0`` delega en :meth:`find_all` (todos los chunks).
+        Dentro de cada fenómeno, la cuota se reparte ENTRE SUS SUBCARPETAS
+        (segundo componente del ``doc_id``) para no sesgar el lote hacia la
+        primera subcarpeta alfabética (p. ej. ``AI_Index_Stanford`` en F1):
+        cada subcarpeta se consulta por separado, ordenada por ``chunk_id``,
+        con su cuota (:meth:`_cuotas_por_subcarpeta`). Con ``limite <= 0``
+        delega en :meth:`find_all` (todos los chunks).
         """
         cuotas = self._cuotas_por_fenomeno(limite, n_fenomenos)
         if not cuotas:
@@ -158,12 +195,26 @@ class MongoChunkRepository(ChunkRepository):
         self.connect()
         coleccion = self._cliente[self._db_name][self._collection_name]  # type: ignore[union-attr]
         chunks: List[Chunk] = []
+        reparto: Dict[int, Dict[str, int]] = {}
         for fenomeno, tope in cuotas.items():
-            docs = coleccion.find({"fenomeno": fenomeno}).sort("chunk_id", ASCENDING).limit(tope)
-            chunks.extend(Chunk.model_validate(d) for d in docs)
+            if tope <= 0:
+                continue
+            doc_ids = coleccion.distinct("doc_id", {"fenomeno": fenomeno})
+            subcarpetas = sorted({self._subcarpeta_de(d) for d in doc_ids})
+            sub_cuotas = self._cuotas_por_subcarpeta(tope, subcarpetas)
+            reparto[fenomeno] = sub_cuotas
+            for sub, sub_tope in sub_cuotas.items():
+                if sub_tope <= 0:
+                    continue
+                docs = (
+                    coleccion.find({"fenomeno": fenomeno, "doc_id": {"$regex": "^" + re.escape(sub)}})
+                    .sort("chunk_id", ASCENDING)
+                    .limit(sub_tope)
+                )
+                chunks.extend(Chunk.model_validate(d) for d in docs)
         logger.info(
-            "Lote balanceado: %d chunks en %d fenómenos con cuotas %s",
-            len(chunks), n_fenomenos, cuotas,
+            "Lote balanceado: %d chunks en %d fenómenos con cuotas %s | reparto por subcarpeta %s",
+            len(chunks), n_fenomenos, cuotas, reparto,
         )
         return chunks
 
