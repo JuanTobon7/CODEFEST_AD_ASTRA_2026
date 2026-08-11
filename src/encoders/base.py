@@ -148,24 +148,46 @@ class EncoderStrategy(ABC):
         return self.contar_tokens(texto) > self.max_input_tokens
 
     def ajustar_a_limite(self, texto: str) -> Optional[str]:
-        """Trunca ``texto`` por oraciones completas hasta caber en el límite.
+        """Trunca ``texto`` hasta caber en ``max_input_tokens``.
 
-        Devuelve el texto sin cambios si ya cabe, el texto truncado si es
-        posible preservar al menos una oración, o ``None`` si ni la primera
-        oración cabe (el llamador debe excluir el chunk para ese encoder).
+        Devuelve el texto sin cambios si ya cabe, el texto truncado por
+        oraciones completas si es posible preservar al menos una, o un
+        corte duro por tokens (:meth:`_corte_duro`) como ÚLTIMO recurso
+        cuando ni una oración cabe: siempre se toma la porción que se pudo
+        tomar, nunca se excluye el chunk por longitud. Solo devuelve
+        ``None`` si tampoco el corte duro es posible (sin tokenizador).
         """
         if not self.excede_limite(texto):
             return texto
         oraciones = _REGEX_ORACIONES.split(texto.strip())
         if not oraciones or not oraciones[0]:
-            return None
+            return self._corte_duro(texto)
         acumulado = ""
         for oracion in oraciones:
             candidato = f"{acumulado} {oracion}".strip()
             if self.contar_tokens(candidato) > self.max_input_tokens:
                 break
             acumulado = candidato
-        return acumulado or None
+        return acumulado or self._corte_duro(texto)
+
+    def _corte_duro(self, texto: str) -> Optional[str]:
+        """Corte por tokens SIN completitud lingüística (último recurso).
+
+        Recorta a ``max_input_tokens`` tokens exactos (sin margen): el
+        encode de sentence-transformers trunca internamente los special
+        tokens sobrantes a ``max_seq_length``, así que el texto nunca pasa
+        de la cantidad de tokens que declara el encoder.
+        """
+        self.load()
+        tokenizador = getattr(self._model, "tokenizer", None)
+        if tokenizador is None:
+            return None
+        try:
+            ids = tokenizador.encode(texto, add_special_tokens=False)
+            recortados = ids[: self.max_input_tokens]
+            return tokenizador.decode(recortados, skip_special_tokens=True).strip()
+        except Exception:  # pragma: no cover - tokenizador incompatible
+            return None
 
     def encode(self, texts: List[str], is_query: bool = False, batch_size: Optional[int] = None) -> np.ndarray:
         """Codifica ``texts`` en vectores normalizados a norma unitaria.
