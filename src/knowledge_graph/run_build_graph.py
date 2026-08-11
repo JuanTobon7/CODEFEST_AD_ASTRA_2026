@@ -98,12 +98,19 @@ def main(argv: List[str] | None = None) -> int:
         choices=["coocurrencia-oracional", "nli-zero-shot", "mrebel"],
         help="Estrategia de extracción de relaciones (default: mrebel, seq2seq multilingüe)",
     )
+    parser.add_argument(
+        "--num-beams",
+        type=int,
+        default=3,
+        help="Beam search de mREBEL (1 = greedy, ~3x más rápido en CPU; solo aplica con --re mrebel)",
+    )
     args = parser.parse_args(argv)
 
     try:
         chunks = _leer_chunks(Path(args.encoders_dir), args.encoder, args.limite)
+        kwargs_re = {"num_beams": args.num_beams} if args.re == "mrebel" else {}
         servicio = KnowledgeGraphService(
-            relation_extractor=RelationExtractorFactory.create(args.re)
+            relation_extractor=RelationExtractorFactory.create(args.re, **kwargs_re)
         )
         grafo = servicio.construir_desde_chunks(chunks)
         ruta = servicio.exportar_graphml(args.output)

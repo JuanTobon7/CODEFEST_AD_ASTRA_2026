@@ -15,6 +15,8 @@ cohesión, DIP).
 
 from __future__ import annotations
 
+import logging
+import time
 from pathlib import Path
 from typing import Iterable, List, Protocol, Union
 
@@ -23,6 +25,11 @@ from src.knowledge_graph.graph.knowledge_graph import KnowledgeGraph
 from src.knowledge_graph.graph.repository import GraphBuilder, GraphRepository
 from src.knowledge_graph.models import Query, ScoredChunk
 from src.knowledge_graph.retrieval.adapters import GraphIndexAdapter
+
+logger = logging.getLogger(__name__)
+
+#: Cada cuántos chunks se registra el progreso de la indexación.
+_PROGRESO_CADA = 100
 
 
 class ChunkFuente(Protocol):
@@ -68,6 +75,8 @@ class IndexKnowledgeGraphUseCase:
         Returns:
             El :class:`KnowledgeGraph` resultante, listo para exportar.
         """
+        inicio = time.perf_counter()
+        procesados = 0
         for chunk in chunks:
             resultado = self._pipeline.procesar_chunk(
                 chunk.doc_id, chunk.chunk_id, chunk.texto
@@ -76,11 +85,24 @@ class IndexKnowledgeGraphUseCase:
                 self._builder.agregar_entidad(entidad)
             for tripleta in resultado.tripletas():
                 self._builder.agregar_tripleta(tripleta)
+            procesados += 1
+            if procesados % _PROGRESO_CADA == 0:
+                self._log_progreso(procesados, inicio)
 
         grafo = self._builder.construir()
         if self._repositorio is not None:
             self._repositorio.guardar(grafo, self._ruta_salida)
         return grafo
+
+    @staticmethod
+    def _log_progreso(procesados: int, inicio: float) -> None:
+        """Registra ritmo y ETA estimada (el total se desconoce: es un iterable)."""
+        transcurrido = time.perf_counter() - inicio
+        ritmo = procesados / transcurrido
+        logger.info(
+            "Grafo: %d chunks procesados | %.2f chunks/s | %.1f min transcurridos",
+            procesados, ritmo, transcurrido / 60,
+        )
 
 
 class RetrieveViaGraphUseCase:

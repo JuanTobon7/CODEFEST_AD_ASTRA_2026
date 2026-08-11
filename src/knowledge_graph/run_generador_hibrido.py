@@ -178,11 +178,12 @@ def recuperar_hibrido(
 def _construir_canales(args) -> Tuple[List[Retriever], GraphIndexAdapter]:
     """Carga los canales vectoriales y el canal de grafo (con la RE elegida)."""
     canales = _cargar_canales_vectoriales(Path(args.encoders_dir))
+    kwargs_re = {"num_beams": args.num_beams} if args.re == "mrebel" else {}
     canal_grafo = _cargar_canal_grafo(
         Path(args.encoders_dir),
         args.limite_grafo,
         Path(args.cargar_grafo) if args.cargar_grafo else None,
-        RelationExtractorFactory.create(args.re),
+        RelationExtractorFactory.create(args.re, **kwargs_re),
     )
     return canales, canal_grafo
 
@@ -217,6 +218,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         default="mrebel",
         choices=["coocurrencia-oracional", "nli-zero-shot", "mrebel"],
         help="Estrategia RE para construir el grafo (default: mrebel, seq2seq multilingüe)",
+    )
+    parser.add_argument(
+        "--num-beams",
+        type=int,
+        default=3,
+        help="Beam search de mREBEL (1 = greedy, ~3x más rápido en CPU; solo aplica con --re mrebel)",
     )
     parser.add_argument("--k-search", type=int, default=50, help="Top-k por canal antes de fusionar")
     parser.add_argument("--k0", type=int, default=60, help="Constante RRF (solo fusion rrf)")
