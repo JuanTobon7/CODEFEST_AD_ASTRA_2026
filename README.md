@@ -2,7 +2,8 @@
 
 Pipeline modular y extensible para **RAG**: extracción, limpieza, chunking
 híbrido (estructural + semántico con overlap), metadata obligatoria y
-persistencia en **MongoDB**. Implementa los patrones **Factory Method**
+persistencia de chunks en **JSON** (MongoDB sigue disponible como alternativa).
+Implementa los patrones **Factory Method**
 (extractores) y **Strategy** (chunking) con inyección de dependencias real.
 
 ---
@@ -18,7 +19,7 @@ flowchart LR
     E --> F[ChunkingStrategy.chunk<br/>structural | semantic | hybrid |<br/>paragraph | paragraph_overlap]
     F --> G[MetadataBuilder.enrich<br/>campos Tabla 1]
     G --> H[ChunkValidator.validate]
-    H -->|válidos| I[MongoChunkRepository.save_many<br/>upsert idempotente]
+    H -->|válidos| I[JsonChunkRepository.save_many<br/>upsert idempotente]
     H -->|rechazados| J[Log detallado<br/>y exclusion]
     I --> K[IngestionResult<br/>conteos + warnings]
 ```
@@ -181,6 +182,30 @@ db.chunks.getIndexes()   # uq_chunk_id (único), idx_doc_id, idx_fenomeno
 ```
 
 ---
+
+### Repositorio JSON de chunks
+
+La ingesta usa por defecto `JsonChunkRepository`. Guarda todos los fragmentos
+en `data/chunks.json` como una lista JSON, con upsert idempotente por
+`chunk_id` y escritura atomica. Cada objeto contiene exactamente los campos
+obligatorios de la Tabla 1:
+
+```json
+{
+  "doc_id": "fenomeno_1/informe.md",
+  "chunk_id": "fenomeno_1/informe.md__chunk_00000",
+  "fuente": "informe.md",
+  "formato": "md",
+  "fenomeno": 1,
+  "posicion": 0,
+  "num_tokens": 123,
+  "texto": "Texto original del fragmento."
+}
+```
+
+Configura otra ruta con `CHUNKS_JSON_PATH`. Para seguir usando MongoDB como
+repositorio de chunks, define `CHUNK_REPOSITORY=mongo`. La etapa de embeddings
+y la exportacion FAISS leen la misma configuracion de chunks.
 
 ## 7. Tests
 

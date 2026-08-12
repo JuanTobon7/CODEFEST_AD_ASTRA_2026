@@ -24,6 +24,8 @@ from src.metadata.metadata_builder import MetadataBuilder
 from src.models.batch_summary import BatchSummary
 from src.models.config import Settings
 from src.models.pipeline_result import IngestionResult
+from src.persistence.base_repository import ChunkRepository
+from src.persistence.json_repository import JsonChunkRepository
 from src.persistence.mongo_repository import MongoChunkRepository
 from src.pipeline.corpus_service import CorpusService
 from src.pipeline.ingestion_pipeline import IngestionPipeline
@@ -66,7 +68,7 @@ class BatchIngestor:
         except ValueError:
             return Path(filepath).stem
 
-    def _build_pipeline(self) -> Tuple[IngestionPipeline, MongoChunkRepository]:
+    def _build_pipeline(self) -> Tuple[IngestionPipeline, ChunkRepository]:
         """Ensambla el pipeline con todas sus dependencias (factories)."""
         segmenter = TextSegmenter.crear(
             tokenizer_model=self._settings.tokenizer_model,
@@ -79,14 +81,23 @@ class BatchIngestor:
         # Boilerplate de lote: líneas repetidas entre documentos del corpus.
         cleaner.set_corpus_boilerplate(self._corpus_service.read_plain_text_docs())
 
-        repositorio = MongoChunkRepository(
-            uri=self._settings.mongo_uri,
-            db_name=self._settings.mongo_db,
-            collection_name=self._settings.mongo_collection,
-            username=self._settings.mongo_user,
-            password=self._settings.mongo_password,
-            auth_source=self._settings.mongo_auth_source,
-        )
+        tipo_repositorio = self._settings.chunk_repository.strip().lower()
+        if tipo_repositorio == "json":
+            repositorio: ChunkRepository = JsonChunkRepository(self._settings.chunks_json_path)
+        elif tipo_repositorio == "mongo":
+            repositorio = MongoChunkRepository(
+                uri=self._settings.mongo_uri,
+                db_name=self._settings.mongo_db,
+                collection_name=self._settings.mongo_collection,
+                username=self._settings.mongo_user,
+                password=self._settings.mongo_password,
+                auth_source=self._settings.mongo_auth_source,
+            )
+        else:
+            raise ValueError(
+                "CHUNK_REPOSITORY debe ser 'json' o 'mongo', "
+                f"no '{self._settings.chunk_repository}'"
+            )
 
         pipeline = IngestionPipeline(
             extractor_factory=ExtractorFactory(),

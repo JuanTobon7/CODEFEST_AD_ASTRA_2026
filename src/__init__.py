@@ -7,6 +7,6 @@ Agrupa los submódulos funcionales del pipeline:
 - ``cleaning``: limpieza y normalización de texto.
 - ``metadata``: construcción de metadata obligatoria por fragmento.
 - ``validation``: validaciones previas a la persistencia.
-- ``persistence``: repositorio de fragmentos (MongoDB).
+- ``persistence``: repositorios de fragmentos (JSON por defecto, MongoDB opcional).
 - ``pipeline``: orquestación del flujo completo.
 """

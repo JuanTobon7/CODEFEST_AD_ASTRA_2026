@@ -38,6 +38,11 @@ class EmbeddingConfig(BaseSettings):
     mongo_password: Optional[str] = os.getenv("MONGO_PASSWORD", "admin")
     mongo_auth_source: Optional[str] = os.getenv("MONGO_AUTH_SOURCE", "admin")
 
+    # El mismo repositorio de chunks usado por la ingesta. Los embeddings y
+    # su cache pueden seguir almacenandose en MongoDB de forma independiente.
+    chunk_repository: str = os.getenv("CHUNK_REPOSITORY", "json")
+    chunks_json_path: Path = Path(os.getenv("CHUNKS_JSON_PATH", "data/chunks.json"))
+
     # Sección 5: construcción de índices FAISS por encoder.
     faiss_index_type: str = os.getenv("FAISS_INDEX_TYPE", "flat_ip")  # flat_ip | ivf_flat | hnsw | auto
     faiss_ivf_nlist: int = int(os.getenv("FAISS_IVF_NLIST", "100"))

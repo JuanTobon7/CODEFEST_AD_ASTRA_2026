@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     mongo_user: str = os.getenv("MONGO_USER", "admin")
     mongo_password: str = os.getenv("MONGO_PASSWORD", "admin")
     mongo_auth_source: str = os.getenv("MONGO_AUTH_SOURCE", "admin")
+
+    # Repositorio de chunks: el JSON es el artefacto portable por defecto.
+    # Se puede conservar MongoDB con CHUNK_REPOSITORY=mongo.
+    chunk_repository: str = os.getenv("CHUNK_REPOSITORY", "json")
+    chunks_json_path: Path = Path(os.getenv("CHUNKS_JSON_PATH", "data/chunks.json"))
     
     # Chunking
     chunk_size: int = int(os.getenv("CHUNK_SIZE", "400"))

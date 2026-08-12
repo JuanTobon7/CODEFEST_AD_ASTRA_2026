@@ -35,6 +35,16 @@ def _configurar_logging(verbose: bool) -> None:
 
 def _log_configuracion(settings: Settings) -> None:
     """Registra la configuración activa del pipeline en el log."""
+    destino_chunks = (
+        settings.chunks_json_path
+        if settings.chunk_repository.strip().lower() == "json"
+        else f"{settings.mongo_db}.{settings.mongo_collection}"
+    )
+    logger.info(
+        "Repositorio de chunks | tipo=%s destino=%s",
+        settings.chunk_repository,
+        destino_chunks,
+    )
     logger.info(
         "Configuración | mongo=%s/%s.%s | estrategia=%s | chunk=%d overlap=%d min=%d max=%d",
         settings.mongo_uri,

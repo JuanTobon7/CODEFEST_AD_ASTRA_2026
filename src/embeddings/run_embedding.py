@@ -37,11 +37,27 @@ from src.encoders.base import EncoderConfig
 from src.encoders.factory import EncoderFactory
 from src.encoders.orchestrator import EncoderOrchestrator, EncoderRunResult
 from src.models.chunk import Chunk
+from src.persistence.base_repository import ChunkRepository
+from src.persistence.json_repository import JsonChunkRepository
 from src.persistence.mongo_repository import MongoChunkRepository
 from src.vectorstore.models import EmbeddingRecord
 from src.vectorstore.vector_repository import MongoVectorRepository
 
 logger = logging.getLogger("run_embedding")
+
+
+def _crear_repositorio_chunks(config: EmbeddingConfig) -> ChunkRepository:
+    """Selecciona la fuente de chunks configurada para la etapa de embeddings."""
+    tipo = config.chunk_repository.strip().lower()
+    if tipo == "json":
+        return JsonChunkRepository(config.chunks_json_path)
+    if tipo == "mongo":
+        return MongoChunkRepository(
+            config.mongo_uri, config.mongo_db, config.mongo_collection_chunks,
+            username=config.mongo_user, password=config.mongo_password,
+            auth_source=config.mongo_auth_source,
+        )
+    raise ValueError(f"CHUNK_REPOSITORY debe ser 'json' o 'mongo', no '{config.chunk_repository}'")
 
 
 def _configurar_logging(verbose: bool) -> None:
@@ -145,10 +161,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ]
     orquestador = EncoderOrchestrator(estrategias, batch_size=config.embedding_batch_size)
 
-    repositorio_chunks = MongoChunkRepository(
-        config.mongo_uri, config.mongo_db, config.mongo_collection_chunks,
-        username=config.mongo_user, password=config.mongo_password, auth_source=config.mongo_auth_source,
-    )
+    repositorio_chunks = _crear_repositorio_chunks(config)
     cache = EmbeddingCache(
         config.mongo_uri, config.mongo_db, config.mongo_collection_embeddings_cache,
         username=config.mongo_user, password=config.mongo_password, auth_source=config.mongo_auth_source,
@@ -200,8 +213,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     _construir_registros_embedding(resultado, chunks_por_id, chunk_id_to_hash)
                 )
                 cache.marcar_procesados(nombre, {cid: chunk_id_to_hash[cid] for cid in resultado.chunk_ids})
-                for chunk_id in resultado.chunk_ids:
-                    repositorio_chunks.mark_encoder_procesado(chunk_id, nombre)
+                marcar_procesado = getattr(repositorio_chunks, "mark_encoder_procesado", None)
+                if callable(marcar_procesado):
+                    for chunk_id in resultado.chunk_ids:
+                        marcar_procesado(chunk_id, nombre)
                 _log_fenomenos(
                     f"encoder '{nombre}' | embeddings generados y persistidos",
                     _por_fenomeno([chunks_por_id[cid] for cid in resultado.chunk_ids]),
