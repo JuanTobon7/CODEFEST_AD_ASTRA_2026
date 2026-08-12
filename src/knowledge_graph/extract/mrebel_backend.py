@@ -143,7 +143,6 @@ class MrebelInferenceEngine:
                 attention_mask=mascara,
                 decoder_start_token_id=decoder_start,
                 max_length=self._max_length,
-                length_penalty=0,
                 num_beams=self._num_beams,
                 num_return_sequences=self._num_beams,
             )
