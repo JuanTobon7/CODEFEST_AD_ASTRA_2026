@@ -17,7 +17,7 @@ import argparse
 import hashlib
 import logging
 import sys
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 # Importar el paquete de estrategias concretas registra cada una vía
 # @EncoderFactory.register (efecto secundario necesario antes de crear()).
@@ -107,7 +107,7 @@ def _parser() -> argparse.ArgumentParser:
         "--limite",
         type=int,
         default=0,
-        help="Procesar hasta N chunks repartidos equitativamente entre los 3 fenómenos (0 = todos)",
+        help="Procesar hasta N chunks repartidos equitativamente entre los 3 fenómenos y sus subcarpetas (0 = todos)",
     )
     parser.add_argument("--verbose", action="store_true", help="Logging en nivel DEBUG")
     return parser
@@ -161,8 +161,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         # Con --limite, el lote se reparte equitativamente entre los fenómenos
-        # (1000 -> ~333 por fenómeno) para no sesgar la cobertura del índice
-        # hacia un solo fenómeno (el orden natural favorece a F1).
+        # (1000 -> ~333 por fenómeno) y, dentro de cada fenómeno, entre sus
+        # subcarpetas (para no sesgar la cobertura hacia la primera subcarpeta
+        # alfabética, p. ej. AI_Index_Stanford en F1).
         if args.limite > 0:
             chunks = repositorio_chunks.find_all_balanceado(args.limite)
         else:

@@ -14,3 +14,4 @@ venv/
 .venv/
 __pycache__/
 .env
+*.graphml

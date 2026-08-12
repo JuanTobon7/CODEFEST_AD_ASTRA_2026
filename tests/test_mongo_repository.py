@@ -12,6 +12,8 @@ Cubre:
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from src.models.chunk import Chunk
@@ -55,9 +57,23 @@ class _FakeColeccion:
     def __getitem__(self, nombre):
         return self
 
+    def _filtrar(self, filtro):
+        docs = list(self._docs)
+        if filtro:
+            fenomeno = filtro.get("fenomeno")
+            if fenomeno:
+                docs = [d for d in docs if d.get("fenomeno") == fenomeno]
+            doc_id = filtro.get("doc_id")
+            if isinstance(doc_id, dict) and "$regex" in doc_id:
+                rx = re.compile(doc_id["$regex"])
+                docs = [d for d in docs if rx.match(d.get("doc_id", ""))]
+        return docs
+
+    def distinct(self, campo, filtro=None):
+        return sorted({d.get(campo) for d in self._filtrar(filtro)})
+
     def find(self, filtro):
-        fenomeno = filtro.get("fenomeno") if filtro else None
-        docs = [d for d in self._docs if d.get("fenomeno") == fenomeno] if fenomeno else list(self._docs)
+        docs = self._filtrar(filtro)
         docs.sort(key=lambda d: d["chunk_id"])
         return _FakeCursor(docs)
 
@@ -161,6 +177,111 @@ def test_lote_balanceado_sin_limite_delega_en_find_all():
 
 def test_lote_balanceado_determinista():
     repo = _repo(_corpus_mixto())
+    primero = repo.find_all_balanceado(30)
+    segundo = repo.find_all_balanceado(30)
+    assert [c.chunk_id for c in primero] == [c.chunk_id for c in segundo]
+
+
+# -- muestreo por subcarpeta (regresión del sesgo alfabético) -----------------
+
+def _doc_ruta(chunk_id: str, fenomeno: int, doc_id: str, posicion: int = 0) -> dict:
+    """Documento con ``doc_id`` de ruta real (``raiz\\subcarpeta\\...``)."""
+    return {
+        "doc_id": doc_id,
+        "chunk_id": chunk_id,
+        "fuente": "prueba.md",
+        "formato": "md",
+        "fenomeno": fenomeno,
+        "posicion": posicion,
+        "num_tokens": 10,
+        "texto": f"Texto de {chunk_id}",
+    }
+
+
+def _corpus_subcarpetas():
+    """F1 con 2 subcarpetas (AI_Index_Stanford, Atlantic_Council); F2/F3 con 1.
+
+    Reproduce el sesgo real: sin reparto por subcarpeta, la cuota de F1 se
+    llenaría solo con ``AI_Index_Stanford`` (primera alfabética).
+    """
+    docs = []
+    for i in range(20):
+        docs.append(_doc_ruta(
+            f"f1-ai-{i:03d}", 1,
+            f"F1_IA_y_Capacidades_Estrategicas\\AI_Index_Stanford\\pdfs\\doc{i}.pdf",
+            posicion=i,
+        ))
+    for i in range(20):
+        docs.append(_doc_ruta(
+            f"f1-at-{i:03d}", 1,
+            f"F1_IA_y_Capacidades_Estrategicas\\Atlantic_Council\\paginas\\doc{i}.json",
+            posicion=i,
+        ))
+    for i in range(20):
+        docs.append(_doc_ruta(
+            f"f2-{i:03d}", 2,
+            f"F2_Seguridad_Entorno_Espacial\\CSIS_Aerospace\\articulos\\doc{i}.json",
+            posicion=i,
+        ))
+    for i in range(20):
+        docs.append(_doc_ruta(
+            f"f3-{i:03d}", 3,
+            f"F3_Dinamicas_Territoriales\\Alertas_Tempranas\\pdfs\\doc{i}.pdf",
+            posicion=i,
+        ))
+    return docs
+
+
+def test_subcarpeta_de():
+    assert MongoChunkRepository._subcarpeta_de(
+        r"F1_IA_y_Capacidades_Estrategicas\AI_Index_Stanford\pdfs\doc.pdf"
+    ) == r"F1_IA_y_Capacidades_Estrategicas\AI_Index_Stanford"
+    assert MongoChunkRepository._subcarpeta_de(
+        "F2_Seguridad_Entorno_Espacial/CSIS_Aerospace/articulos/doc.json"
+    ) == "F2_Seguridad_Entorno_Espacial/CSIS_Aerospace"
+    assert MongoChunkRepository._subcarpeta_de("Indice_Datos_Codefest.xlsx") == "Indice_Datos_Codefest.xlsx"
+
+
+@pytest.mark.parametrize(
+    ("limite", "subs", "esperado"),
+    [
+        (10, ["a", "b"], {"a": 5, "b": 5}),
+        (11, ["a", "b"], {"a": 6, "b": 5}),
+        (10, ["b", "a"], {"a": 5, "b": 5}),  # orden alfabético, no de entrada
+        (0, ["a"], {}),
+        (10, [], {}),
+    ],
+)
+def test_cuotas_por_subcarpeta(limite, subs, esperado):
+    assert MongoChunkRepository._cuotas_por_subcarpeta(limite, subs) == esperado
+
+
+def test_cuotas_por_subcarpeta_suman_el_limite():
+    subs = ["a", "b", "c", "d"]
+    for limite in range(1, 20):
+        cuotas = MongoChunkRepository._cuotas_por_subcarpeta(limite, subs)
+        assert sum(cuotas.values()) == limite
+
+
+def test_balanceado_reparte_entre_subcarpetas():
+    """Regresión del sesgo: la cuota de F1 NO se llena solo con la primera
+    subcarpeta alfabética (AI_Index_Stanford)."""
+    repo = _repo(_corpus_subcarpetas())
+    chunks = repo.find_all_balanceado(30)  # cuotas 10/10/10
+    f1 = [c for c in chunks if c.fenomeno == 1]
+    assert len(f1) == 10
+    por_sub = {}
+    for c in f1:
+        s = MongoChunkRepository._subcarpeta_de(c.doc_id)
+        por_sub[s] = por_sub.get(s, 0) + 1
+    assert por_sub == {
+        r"F1_IA_y_Capacidades_Estrategicas\AI_Index_Stanford": 5,
+        r"F1_IA_y_Capacidades_Estrategicas\Atlantic_Council": 5,
+    }
+
+
+def test_balanceado_por_subcarpeta_determinista():
+    repo = _repo(_corpus_subcarpetas())
     primero = repo.find_all_balanceado(30)
     segundo = repo.find_all_balanceado(30)
     assert [c.chunk_id for c in primero] == [c.chunk_id for c in segundo]
