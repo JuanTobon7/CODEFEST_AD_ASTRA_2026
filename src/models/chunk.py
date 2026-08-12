@@ -8,7 +8,7 @@ metadata obligatoria de la Tabla 1 del reto (CODEFEST AD ASTRA 2026).
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import ClassVar, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -48,6 +48,19 @@ class Chunk(BaseModel):
     # Campos de auditoría interna
     validation_warnings: List[str] = Field(default_factory=list)
 
+    # Esquema de entrega: estos campos deben estar presentes en cada registro
+    # persistido en el archivo JSON de chunks.
+    CAMPOS_METADATA_OBLIGATORIA: ClassVar[tuple[str, ...]] = (
+        "doc_id",
+        "chunk_id",
+        "fuente",
+        "formato",
+        "fenomeno",
+        "posicion",
+        "num_tokens",
+        "texto",
+    )
+
     @field_validator("doc_id", "chunk_id", "fuente")
     @classmethod
     def _campos_no_vacios(cls, valor: str, info) -> str:
@@ -63,3 +76,12 @@ class Chunk(BaseModel):
         if datos.get("created_at") is None:
             datos["created_at"] = _utc_now()
         return datos
+
+    @property
+    def como_dict_json(self) -> dict:
+        """Metadata canonica para un registro del repositorio JSON.
+
+        El artefacto de chunks conserva exclusivamente los ocho campos
+        obligatorios de la Tabla 1 y no incluye campos internos de ejecucion.
+        """
+        return self.model_dump(include=set(self.CAMPOS_METADATA_OBLIGATORIA))

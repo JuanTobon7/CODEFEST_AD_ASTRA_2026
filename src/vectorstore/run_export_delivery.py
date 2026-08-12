@@ -22,6 +22,8 @@ from typing import List, Optional
 # Registran cada tipo de índice vía @IndexBuilderFactory.register.
 from src.vectorstore import flat_ip_strategy, hnsw_strategy, ivf_flat_strategy  # noqa: F401
 from src.embeddings.embedding_config import EmbeddingConfig
+from src.persistence.base_repository import ChunkRepository
+from src.persistence.json_repository import JsonChunkRepository
 from src.persistence.mongo_repository import MongoChunkRepository
 from src.vectorstore.export_delivery import DeliveryExporter, ExportError
 from src.vectorstore.index_builder_base import IndexBuildConfig
@@ -29,6 +31,20 @@ from src.vectorstore.index_builder_factory import IndexBuilderFactory
 from src.vectorstore.vector_repository import MongoVectorRepository
 
 logger = logging.getLogger("run_export_delivery")
+
+
+def _crear_repositorio_chunks(config: EmbeddingConfig) -> ChunkRepository:
+    """Selecciona la fuente de chunks configurada para la exportacion."""
+    tipo = config.chunk_repository.strip().lower()
+    if tipo == "json":
+        return JsonChunkRepository(config.chunks_json_path)
+    if tipo == "mongo":
+        return MongoChunkRepository(
+            config.mongo_uri, config.mongo_db, config.mongo_collection_chunks,
+            username=config.mongo_user, password=config.mongo_password,
+            auth_source=config.mongo_auth_source,
+        )
+    raise ValueError(f"CHUNK_REPOSITORY debe ser 'json' o 'mongo', no '{config.chunk_repository}'")
 
 
 def _configurar_logging(verbose: bool) -> None:
@@ -55,7 +71,7 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "Construye el índice con los embeddings disponibles, omitiendo "
             "(con warning) los chunks que aún no tienen vector. La entrega "
-            "oficial sigue exigiendo el 100%."
+            "oficial sigue exigiendo el 100%%."
         ),
     )
     parser.add_argument("--verbose", action="store_true", help="Logging en nivel DEBUG")
@@ -80,10 +96,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         ivf_auto_threshold=config.faiss_ivf_auto_threshold,
     )
 
-    repositorio_chunks = MongoChunkRepository(
-        config.mongo_uri, config.mongo_db, config.mongo_collection_chunks,
-        username=config.mongo_user, password=config.mongo_password, auth_source=config.mongo_auth_source,
-    )
+    repositorio_chunks = _crear_repositorio_chunks(config)
     repositorio_vectores = MongoVectorRepository(
         config.mongo_uri, config.mongo_db, config.mongo_collection_embeddings,
         username=config.mongo_user, password=config.mongo_password, auth_source=config.mongo_auth_source,
