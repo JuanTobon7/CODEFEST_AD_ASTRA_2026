@@ -12,7 +12,9 @@ cuantiza por párrafos. Dentro de cada chunk los párrafos se unen con
 Reglas:
 - Sección completa por debajo de ``chunk_size`` tokens → un solo chunk.
 - Sección atómica (``splittable=False``) → un solo chunk (no se ventanea).
-- Párrafo/ventana que excede ``max_tokens`` → corte duro por tokens.
+- Párrafo/ventana que excede ``max_tokens`` → se reparte en oraciones
+  completas (``_anadir_chunks`` de la clase base), nunca por corte ciego de
+  tokens: el corte retrocede al final de la última oración que cabe.
 """
 
 from __future__ import annotations
@@ -46,37 +48,6 @@ class ParagraphOverlapChunkingStrategy(ChunkingStrategy):
                 continue
             self._dividir_seccion(extracted_doc, seccion, config, chunks)
         return chunks
-
-    def _anadir_chunks(
-        self,
-        extracted_doc: ExtractedDocument,
-        texto: str,
-        config: ChunkingConfig,
-        chunks: List[Chunk],
-        seccion: str | None = None,
-        overlap_con: str | None = None,
-    ) -> None:
-        """Añade ``texto`` como un chunk, o varios si supera ``max_tokens``.
-
-        Unidad atómica o ventana de párrafos más larga que el límite del
-        encoder: se parte por tokens (corte duro) para no perder contenido,
-        ya que el validador rechazaría el fragmento completo.
-        """
-        if self.segmenter.count_tokens(texto) > config.max_tokens:
-            for pieza in self.segmenter.dividir_por_tokens(texto, config.max_tokens):
-                chunks.append(
-                    self._construir_chunk(
-                        extracted_doc, pieza, len(chunks), config,
-                        seccion=seccion, overlap_con=overlap_con,
-                    )
-                )
-            return
-        chunks.append(
-            self._construir_chunk(
-                extracted_doc, texto, len(chunks), config,
-                seccion=seccion, overlap_con=overlap_con,
-            )
-        )
 
     def _dividir_seccion(
         self,

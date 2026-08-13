@@ -101,3 +101,44 @@ def test_filas_tabulares_sin_punto_no_generan_warning():
     resultado = ChunkValidator().validate([fila])
     assert len(resultado.validos) == 1
     assert fila.validation_warnings == []
+
+
+# --- Precisión de la heurística de completitud lingüística -----------------------
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        'El ministro dijo: "la meta se cumplió."',  # comilla de cierre tras el punto
+        "Los resultados se detallan en el anexo (ver nota al pie.)",  # paréntesis
+        "La cita cerrada quedó así «no hubo acuerdo»",  # comilla angular
+        "Los factores considerados son:",  # encabezado de lista
+        "2024 fue el año con mayor pérdida de cobertura boscosa.",  # empieza con número
+        "- Primer elemento de la lista de hallazgos",  # viñeta
+        "3.2 Metodología de análisis",  # numeración de sección
+        "RESULTADOS PRINCIPALES",  # encabezado en versales
+        "Artículo 5 del decreto reglamentario",  # encabezado numerado
+        "poblacion: 7743955",  # par clave: valor en un PDF
+    ],
+)
+def test_contenido_completo_no_genera_advertencias(texto):
+    """Cierres tipográficos, encabezados y listas no son oraciones cortadas."""
+    chunk = _chunk(0, formato="pdf", texto=texto)
+    ChunkValidator().validate([chunk])
+    assert chunk.validation_warnings == [], texto
+
+
+@pytest.mark.parametrize(
+    "texto,fragmento_esperado",
+    [
+        ("Oración cortada a la mitad sin punto", "puntuación terminal"),
+        ("El texto continúa con los datos de la", "puntuación terminal"),
+        ("Según lo previsto en el Art.", "puntuación terminal"),  # abreviatura
+        ("boscosa disminuyó de forma sostenida.", "mitad de una oración"),
+    ],
+)
+def test_cortes_reales_si_generan_advertencia(texto, fragmento_esperado):
+    """Los cortes de verdad se siguen detectando (la heurística no calla todo)."""
+    chunk = _chunk(0, formato="pdf", texto=texto)
+    ChunkValidator().validate([chunk])
+    assert any(fragmento_esperado in w for w in chunk.validation_warnings), texto

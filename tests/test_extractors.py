@@ -11,7 +11,12 @@ import pytest
 
 from src.extractors.base import ExtractorError
 from src.extractors.factory import ExtractorFactory, register_extractor
-from src.models.extracted_document import Formato
+from src.extractors.pdf_extractor import (
+    PDFExtractor,
+    _es_continuacion,
+    _es_ruido_de_pagina,
+)
+from src.models.extracted_document import Formato, Section
 
 
 @pytest.fixture
@@ -162,3 +167,63 @@ def test_csv_extractor_filas_independientes(archivo_csv, factory):
 def test_extractor_archivo_inexistente(factory):
     with pytest.raises(ExtractorError, match="no existe"):
         factory.create(Path("doc.pdf")).extract(Path("no_existe.pdf"))
+
+
+# --- Reconstrucción de párrafos en PDF ---------------------------------------
+
+
+def test_pdf_une_lineas_deshaciendo_la_particion_por_guion():
+    """El guion de fin de línea se deshace; el de un compuesto se conserva."""
+    assert PDFExtractor._unir_lineas(["La informa-", "ción disponible"]) == "La información disponible"
+    assert PDFExtractor._unir_lineas(["El eje Norte-", "Sur del país."]) == "El eje Norte-Sur del país."
+    assert PDFExtractor._unir_lineas(["Primera línea", "segunda línea"]) == "Primera línea segunda línea"
+
+
+@pytest.mark.parametrize(
+    "texto,es_ruido",
+    [
+        ("12", True),
+        ("- 12 -", True),
+        ("Página 3 de 40", True),
+        ("2024 1.234 5.678 9.012", False),  # fila numérica de tabla: es contenido
+        ("Introducción", False),
+    ],
+)
+def test_pdf_detecta_ruido_de_pagina(texto, es_ruido):
+    assert _es_ruido_de_pagina(texto) is es_ruido
+
+
+def test_pdf_detecta_continuacion_de_parrafo():
+    """Solo se fusionan bloques con evidencia por ambos lados."""
+    assert _es_continuacion("El informe señala que la cobertura", "boscosa se redujo un 3%.")
+    assert not _es_continuacion("El informe termina aquí.", "Otro párrafo nuevo.")
+    assert not _es_continuacion("El informe señala que", "- primer ítem de lista")
+    assert not _es_continuacion("El informe señala que", "Otro bloque en mayúscula.")
+
+
+def test_pdf_reflota_la_oracion_que_cruza_de_pagina():
+    """La oración abierta al final de una página se cierra en esa misma página.
+
+    Cada página es una sección y el chunking nunca cruza secciones: sin esto,
+    la oración quedaría partida entre dos fragmentos.
+    """
+    secciones = [
+        Section(texto="Párrafo uno.\n\nEl análisis muestra que la cobertura", orden=0),
+        Section(texto="boscosa disminuyó de forma sostenida.\n\nSiguiente párrafo.", orden=1),
+    ]
+    PDFExtractor._reflotar_entre_paginas(secciones)
+
+    assert secciones[0].texto.endswith("boscosa disminuyó de forma sostenida.")
+    assert secciones[1].texto == "Siguiente párrafo."
+
+
+def test_pdf_no_reflota_paginas_independientes():
+    """Si la página anterior cierra su oración, no se toca nada."""
+    secciones = [
+        Section(texto="La página termina bien.", orden=0),
+        Section(texto="La siguiente empieza bien.", orden=1),
+    ]
+    PDFExtractor._reflotar_entre_paginas(secciones)
+
+    assert secciones[0].texto == "La página termina bien."
+    assert secciones[1].texto == "La siguiente empieza bien."

@@ -18,6 +18,16 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Advertencia que registra el único caso en que el pipeline no puede cumplir el
+# requisito de completitud lingüística: una oración que por sí sola supera el
+# límite del encoder y, por tanto, hay que partir a mitad para no perderla.
+# La escriben las estrategias de chunking (que conocen la causa) y la respeta el
+# validador (que solo puede observar el síntoma).
+ADVERTENCIA_CORTE_FORZADO = (
+    "corte forzado dentro de una oración: la oración supera el límite del encoder"
+)
+
+
 class Chunk(BaseModel):
     """Fragmento de texto indexable con metadata obligatoria.
 

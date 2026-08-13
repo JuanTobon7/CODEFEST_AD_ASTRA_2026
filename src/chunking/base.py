@@ -11,15 +11,30 @@ from __future__ import annotations
 import logging
 import re
 from abc import ABC, abstractmethod
-from typing import List, Tuple
+from typing import List, NamedTuple, Tuple
 
-from src.models.chunk import Chunk
+from src.models.chunk import ADVERTENCIA_CORTE_FORZADO, Chunk
 from src.models.config import ChunkingConfig
 from src.models.extracted_document import ExtractedDocument
 from src.support.sentence_splitter import SentenceSplitter
 from src.support.tokenizer import Tokenizer, TokenizerFactory
 
 logger = logging.getLogger(__name__)
+
+
+class PiezaTexto(NamedTuple):
+    """Fragmento de texto listo para convertirse en chunk.
+
+    Atributos:
+        texto: Contenido del fragmento.
+        corte_forzado: ``True`` si hubo que cortar DENTRO de una oración
+            (única situación en la que no se puede cumplir el requisito de
+            completitud lingüística: una oración aislada más larga que el
+            límite del encoder).
+    """
+
+    texto: str
+    corte_forzado: bool
 
 
 class TextSegmenter:
@@ -48,6 +63,78 @@ class TextSegmenter:
         preserva todo el contenido a costa de cortar en mitad de la oración.
         """
         return self.tokenizer.split_tokens(texto, max_tokens)
+
+    def empaquetar_por_oraciones(self, texto: str, max_tokens: int) -> List[PiezaTexto]:
+        """Reparte ``texto`` en piezas de ``max_tokens`` cortando entre oraciones.
+
+        Sustituye al corte ciego por tokens cuando hay que fragmentar un texto
+        más largo que el límite del encoder: el texto se descompone en párrafos
+        y estos en oraciones, y las oraciones se acumulan de forma greedy hasta
+        que la siguiente no cabe. Así el corte efectivo retrocede al final de la
+        última oración completa que entra en el límite (requisito de completitud
+        lingüística: ninguna oración cruza la frontera entre dos fragmentos).
+
+        Los separadores originales se conservan: ``\\n\\n`` entre párrafos y un
+        espacio entre oraciones del mismo párrafo.
+
+        Único caso residual: una oración que por sí sola supera ``max_tokens``.
+        No hay forma de guardarla sin cortarla, así que se parte por tokens y
+        las piezas resultantes se marcan con ``corte_forzado=True``.
+
+        Returns:
+            Lista de :class:`PiezaTexto`, cada una con a lo sumo ``max_tokens``.
+        """
+        if not texto or not texto.strip():
+            return []
+        # Cabe entero: se devuelve intacto (preserva el texto original tal cual).
+        if self.count_tokens(texto) <= max_tokens:
+            return [PiezaTexto(texto, False)]
+
+        piezas: List[PiezaTexto] = []
+        acumulado: List[str] = []
+        tokens_acumulados = 0
+
+        def cerrar_pieza() -> None:
+            nonlocal acumulado, tokens_acumulados
+            if acumulado:
+                piezas.append(PiezaTexto("".join(acumulado).strip(), False))
+            acumulado = []
+            tokens_acumulados = 0
+
+        for separador, oracion in self._unidades_oracionales(texto):
+            costo = self.count_tokens(oracion)
+            if acumulado and tokens_acumulados + costo > max_tokens:
+                cerrar_pieza()
+            if costo > max_tokens:
+                # Oración indivisible más larga que el encoder: corte duro.
+                cerrar_pieza()
+                for trozo in self.dividir_por_tokens(oracion, max_tokens):
+                    piezas.append(PiezaTexto(trozo, True))
+                continue
+            acumulado.append(oracion if not acumulado else separador + oracion)
+            tokens_acumulados += costo
+        cerrar_pieza()
+        return [p for p in piezas if p.texto]
+
+    def _unidades_oracionales(self, texto: str) -> List[Tuple[str, str]]:
+        """Oraciones del texto con el separador que las precede.
+
+        El separador es ``\\n\\n`` cuando la oración abre un párrafo nuevo y un
+        espacio cuando continúa el párrafo actual; así el reempaquetado no
+        destruye la estructura de párrafos del documento original.
+        """
+        unidades: List[Tuple[str, str]] = []
+        for parrafo in self.split_parrafos(texto):
+            oraciones = self.split_oraciones(parrafo) or [parrafo]
+            for indice, oracion in enumerate(oraciones):
+                if not unidades:
+                    separador = ""
+                elif indice == 0:
+                    separador = "\n\n"
+                else:
+                    separador = " "
+                unidades.append((separador, oracion))
+        return unidades
 
     def split_oraciones(self, texto: str) -> List[str]:
         """Divide en oraciones completas (nunca corta una oración)."""
@@ -162,7 +249,38 @@ class ChunkingStrategy(ABC):
             ``num_tokens``, ``texto``, ``chunking_strategy``).
         """
 
-    # Helper compartido --------------------------------------------------------
+    # Helpers compartidos ------------------------------------------------------
+
+    def _anadir_chunks(
+        self,
+        extracted_doc: ExtractedDocument,
+        texto: str,
+        config: ChunkingConfig,
+        chunks: List[Chunk],
+        seccion: str | None = None,
+        overlap_con: str | None = None,
+    ) -> None:
+        """Añade ``texto`` como un chunk, o varios si supera ``max_tokens``.
+
+        Cuando el texto excede el límite del encoder se reparte con
+        :meth:`TextSegmenter.empaquetar_por_oraciones`, de modo que los cortes
+        caen en fronteras de oración completa. Las piezas que aun así hubo que
+        cortar dentro de una oración (oración más larga que ``max_tokens``)
+        quedan marcadas con :data:`ADVERTENCIA_CORTE_FORZADO`.
+        """
+        for pieza in self.segmenter.empaquetar_por_oraciones(texto, config.max_tokens):
+            chunk = self._construir_chunk(
+                extracted_doc, pieza.texto, len(chunks), config,
+                seccion=seccion, overlap_con=overlap_con,
+            )
+            if pieza.corte_forzado:
+                logger.debug(
+                    "Corte forzado dentro de una oración | doc=%s pos=%s",
+                    extracted_doc.doc_id,
+                    chunk.posicion,
+                )
+                chunk.validation_warnings.append(ADVERTENCIA_CORTE_FORZADO)
+            chunks.append(chunk)
 
     def _construir_chunk(
         self,

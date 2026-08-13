@@ -39,22 +39,11 @@ class SemanticOverlapChunkingStrategy(ChunkingStrategy):
         for posicion, (ini, fin) in enumerate(ventanas):
             texto_chunk = " ".join(oraciones[ini : fin + 1]).strip()
             overlap_con = None
-            if posicion > 0:
+            if posicion > 0 and chunks:
                 overlap_con = chunks[-1].chunk_id
-            if self.segmenter.count_tokens(texto_chunk) > config.max_tokens:
-                # Oración(es) más largas que el límite del encoder: corte duro
-                # por tokens para no perder contenido (el validador rechazaría).
-                for pieza in self.segmenter.dividir_por_tokens(texto_chunk, config.max_tokens):
-                    chunks.append(
-                        self._construir_chunk(
-                            extracted_doc, pieza, len(chunks), config,
-                            overlap_con=overlap_con,
-                        )
-                    )
-                continue
-            chunks.append(
-                self._construir_chunk(
-                    extracted_doc, texto_chunk, len(chunks), config, overlap_con=overlap_con
-                )
+            # Si la ventana excede el límite del encoder (oración más larga que
+            # la ventana), se reparte respetando fronteras de oración.
+            self._anadir_chunks(
+                extracted_doc, texto_chunk, config, chunks, overlap_con=overlap_con
             )
         return chunks

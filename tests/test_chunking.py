@@ -13,6 +13,7 @@ from src.chunking.paragraph_overlap_strategy import ParagraphOverlapChunkingStra
 from src.chunking.paragraph_strategy import ParagraphChunkingStrategy
 from src.chunking.semantic_overlap_strategy import SemanticOverlapChunkingStrategy
 from src.chunking.structural_strategy import StructuralChunkingStrategy
+from src.models.chunk import ADVERTENCIA_CORTE_FORZADO
 from src.models.config import ChunkingConfig
 from src.models.extracted_document import ExtractedDocument, Formato, Section
 
@@ -368,6 +369,87 @@ def test_paragraph_overlap_parrafo_que_excede_limite(segmenter: TextSegmenter, c
     reconstruido = " ".join(c.texto for c in chunks)
     assert "palabra_0" in reconstruido and "palabra_699" in reconstruido
     assert "Párrafo final corto." in reconstruido
+
+
+def test_paragraph_overlap_parrafo_largo_corta_en_limite_de_oracion(
+    segmenter: TextSegmenter, chunking_config: ChunkingConfig
+):
+    """Requisito 3.3: un párrafo mayor que max_tokens se parte ENTRE oraciones.
+
+    Es el camino que antes usaba el corte ciego por tokens y que generaba la
+    mayoría de las advertencias en PDF (párrafos largos sin saltos reales).
+    """
+    parrafo = " ".join(
+        f"La cobertura boscosa del area {i} se redujo de forma sostenida durante "
+        f"el periodo analizado segun el inventario nacional." for i in range(60)
+    )
+    assert segmenter.count_tokens(parrafo) > chunking_config.max_tokens
+    chunks = ParagraphOverlapChunkingStrategy(segmenter).chunk(
+        _doc([_sec(parrafo, orden=0)]), chunking_config
+    )
+
+    assert len(chunks) >= 2, "El párrafo debe repartirse en varios fragmentos"
+    for chunk in chunks:
+        assert chunk.num_tokens <= chunking_config.max_tokens
+        assert chunk.texto.rstrip().endswith((".", "?", "!")), (
+            f"Corte a mitad de oración: ...{chunk.texto[-40:]!r}"
+        )
+        assert chunk.validation_warnings == []
+
+
+class _SplitterOracionUnica:
+    """Segmentador que ve todo el texto como una única oración indivisible."""
+
+    def split(self, texto: str) -> list[str]:
+        return [texto.strip()] if texto.strip() else []
+
+
+def test_paragraph_overlap_oracion_gigante_marca_corte_forzado(
+    segmenter: TextSegmenter, chunking_config: ChunkingConfig
+):
+    """Único caso residual: una sola oración más larga que el límite del encoder.
+
+    No hay forma de guardarla sin cortarla, así que se corta y se deja
+    constancia explícita en el fragmento (no se silencia el incumplimiento).
+    """
+    indivisible = TextSegmenter(tokenizer=segmenter.tokenizer, splitter=_SplitterOracionUnica())
+    oracion = " ".join(f"palabra_{i}" for i in range(700)) + "."
+    chunks = ParagraphOverlapChunkingStrategy(indivisible).chunk(
+        _doc([_sec(oracion, orden=0)]), chunking_config
+    )
+
+    assert len(chunks) >= 2
+    assert all(c.num_tokens <= chunking_config.max_tokens for c in chunks)
+    assert all(ADVERTENCIA_CORTE_FORZADO in c.validation_warnings for c in chunks), (
+        "El corte inevitable debe quedar registrado, no silenciado"
+    )
+    reconstruido = " ".join(c.texto for c in chunks)
+    assert "palabra_0" in reconstruido and "palabra_699" in reconstruido
+
+
+def test_empaquetar_por_oraciones_preserva_parrafos(segmenter: TextSegmenter):
+    """El reempaquetado conserva los separadores de párrafo y no pierde texto."""
+    parrafos = [
+        " ".join(f"Oración {i}-{j} del párrafo de prueba." for j in range(20))
+        for i in range(4)
+    ]
+    texto = "\n\n".join(parrafos)
+    piezas = segmenter.empaquetar_por_oraciones(texto, 200)
+
+    assert len(piezas) >= 2
+    assert all(not p.corte_forzado for p in piezas)
+    assert all(segmenter.count_tokens(p.texto) <= 200 for p in piezas)
+    assert any("\n\n" in p.texto for p in piezas), "Se pierde la estructura de párrafos"
+    # Ninguna oración desaparece por el camino.
+    reconstruido = " ".join(p.texto for p in piezas)
+    for i in range(4):
+        assert f"Oración {i}-19 del párrafo de prueba." in reconstruido
+
+
+def test_empaquetar_por_oraciones_texto_corto_intacto(segmenter: TextSegmenter):
+    """Si el texto cabe entero se devuelve tal cual (sin recomponer)."""
+    texto = "Primer párrafo.\n\nSegundo párrafo."
+    assert segmenter.empaquetar_por_oraciones(texto, 512) == [(texto, False)]
 
 
 def test_paragraph_overlap_metadata(segmenter: TextSegmenter, chunking_config_pequeno: ChunkingConfig):

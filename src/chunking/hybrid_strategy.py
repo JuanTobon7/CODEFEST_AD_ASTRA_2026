@@ -51,37 +51,6 @@ class HybridChunkingStrategy(ChunkingStrategy):
             self._dividir_seccion(extracted_doc, seccion, config, chunks)
         return chunks
 
-    def _anadir_chunks(
-        self,
-        extracted_doc: ExtractedDocument,
-        texto: str,
-        config: ChunkingConfig,
-        chunks: List[Chunk],
-        seccion: str | None = None,
-        overlap_con: str | None = None,
-    ) -> None:
-        """Añade ``texto`` como un chunk, o varios si supera ``max_tokens``.
-
-        Unidad atómica u oración única más larga que el límite del encoder:
-        se parte por tokens (corte duro) para no perder contenido, ya que el
-        validador rechazaría el fragmento completo.
-        """
-        if self.segmenter.count_tokens(texto) > config.max_tokens:
-            for pieza in self.segmenter.dividir_por_tokens(texto, config.max_tokens):
-                chunks.append(
-                    self._construir_chunk(
-                        extracted_doc, pieza, len(chunks), config,
-                        seccion=seccion, overlap_con=overlap_con,
-                    )
-                )
-            return
-        chunks.append(
-            self._construir_chunk(
-                extracted_doc, texto, len(chunks), config,
-                seccion=seccion, overlap_con=overlap_con,
-            )
-        )
-
     # Fase 1: fusión de secciones pequeñas ------------------------------------
 
     def _fusionar_secciones_pequenas(

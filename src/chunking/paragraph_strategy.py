@@ -7,8 +7,9 @@ como unidades de segmentación, sin fusionarlos ni partirlos. Es la estrategia
 más cercana a la estructura semántica del autor.
 
 Excepciones (para no perder contenido frente al validador):
-- Un párrafo que excede ``max_tokens`` (límite del encoder) se parte por
-  tokens (corte duro), igual que las demás estrategias del pipeline.
+- Un párrafo que excede ``max_tokens`` (límite del encoder) se reparte en
+  oraciones completas, igual que las demás estrategias del pipeline: el corte
+  retrocede al final de la última oración que cabe en el límite.
 - Las secciones atómicas (``splittable=False``: filas CSV/XLSX, elementos
   PBF) son una única unidad: no se segmentan en párrafos.
 """
@@ -43,35 +44,7 @@ class ParagraphChunkingStrategy(ChunkingStrategy):
             else:
                 parrafos = self.segmenter.split_parrafos(texto)
             for parrafo in parrafos:
-                self._anadir_parrafo(
+                self._anadir_chunks(
                     extracted_doc, parrafo, config, chunks, seccion=seccion.titulo
                 )
         return chunks
-
-    def _anadir_parrafo(
-        self,
-        extracted_doc: ExtractedDocument,
-        parrafo: str,
-        config: ChunkingConfig,
-        chunks: List[Chunk],
-        seccion: str | None = None,
-    ) -> None:
-        """Añade un párrafo como chunk, o varios si supera ``max_tokens``.
-
-        Párrafo más largo que el límite del encoder: se parte por tokens
-        (corte duro) para no perder contenido, ya que el validador rechazaría
-        el fragmento completo.
-        """
-        if self.segmenter.count_tokens(parrafo) > config.max_tokens:
-            for pieza in self.segmenter.dividir_por_tokens(parrafo, config.max_tokens):
-                chunks.append(
-                    self._construir_chunk(
-                        extracted_doc, pieza, len(chunks), config, seccion=seccion
-                    )
-                )
-            return
-        chunks.append(
-            self._construir_chunk(
-                extracted_doc, parrafo, len(chunks), config, seccion=seccion
-            )
-        )

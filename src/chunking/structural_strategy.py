@@ -30,19 +30,10 @@ class StructuralChunkingStrategy(ChunkingStrategy):
             texto = seccion.texto.strip()
             if not texto:
                 continue
-            if self.segmenter.count_tokens(texto) > config.max_tokens:
-                # Sección más larga que el límite del encoder: corte duro por
-                # tokens para no perder contenido (el validador rechazaría).
-                for pieza in self.segmenter.dividir_por_tokens(texto, config.max_tokens):
-                    chunks.append(
-                        self._construir_chunk(
-                            extracted_doc, pieza, len(chunks), config, seccion=seccion.titulo
-                        )
-                    )
-                continue
-            chunks.append(
-                self._construir_chunk(
-                    extracted_doc, texto, len(chunks), config, seccion=seccion.titulo
-                )
+            # Sección más larga que el límite del encoder: se reparte en
+            # oraciones completas para no perder contenido (el validador
+            # rechazaría el fragmento entero por num_tokens).
+            self._anadir_chunks(
+                extracted_doc, texto, config, chunks, seccion=seccion.titulo
             )
         return chunks
