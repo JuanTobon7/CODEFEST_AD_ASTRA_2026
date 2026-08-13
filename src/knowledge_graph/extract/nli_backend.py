@@ -25,6 +25,8 @@ class NLIInferenceEngine:
         device_preference: ``None``/``"auto"`` (detecta CUDA), ``"cpu"`` o ``"cuda"``.
         max_length: truncado de la secuencia premisa+hipótesis.
         batch_size: tamaño de lote del forward (particiona las hipótesis).
+        use_fp16: si hay CUDA, corre el modelo en media precisión (~2x más
+            rápido y la mitad de VRAM); en CPU se ignora.
         tokenizer/modelo: inyectables (tests u otro checkpoint).
     """
 
@@ -34,6 +36,7 @@ class NLIInferenceEngine:
         device_preference: Optional[str] = None,
         max_length: int = 256,
         batch_size: int = 16,
+        use_fp16: bool = False,
         tokenizer=None,
         modelo=None,
     ) -> None:
@@ -41,6 +44,7 @@ class NLIInferenceEngine:
         self._device_preference = device_preference
         self._max_length = max_length
         self._batch_size = batch_size
+        self._use_fp16 = use_fp16
         self._tokenizer = tokenizer
         self._modelo = modelo
         self._cargado = False
@@ -77,11 +81,16 @@ class NLIInferenceEngine:
         self._device = self.resolver_device()
         if hasattr(self._modelo, "to"):
             self._modelo.to(self._device)
+        if self._use_fp16 and self._device.startswith("cuda") and hasattr(self._modelo, "half"):
+            self._modelo.half()
         if hasattr(self._modelo, "eval"):
             self._modelo.eval()
         self._cargado = True
         logger.info(
-            "Modelo NLI listo en '%s' (entailment_idx=%d)", self._device, self._entailment_idx
+            "Modelo NLI listo en '%s' (entailment_idx=%d, fp16=%s)",
+            self._device,
+            self._entailment_idx,
+            self._use_fp16 and self._device.startswith("cuda"),
         )
 
     @staticmethod

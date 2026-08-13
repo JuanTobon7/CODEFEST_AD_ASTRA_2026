@@ -13,9 +13,10 @@ consulta (entidades → nodos → vecinos → tripletas → chunks de evidencia 
 camino hasta el top-k fusionado), para auditar por qué el grafo propuso
 cada candidato.
 
-Sin modelos generativos: NER/RE simbólicos, codificación por los mismos
-encoders de la base vectorial, y el texto de los fragmentos sale de la
-metadata de entrega (nunca se genera).
+Sin modelos generativos en ninguna etapa: NER simbólico, RE por clasificación
+con un encoder MIT (``mDeBERTa-v3-base-mnli-xnli``, sin decoder), codificación
+por los mismos encoders de la base vectorial, y el texto de los fragmentos
+sale de la metadata de entrega (nunca se genera).
 
 Uso:
     python -m src.knowledge_graph.run_generador_hibrido
@@ -39,11 +40,11 @@ from src.knowledge_graph.retrieval.adapters import GraphIndexAdapter
 from src.knowledge_graph.retrieval.base import FusionStrategy, Retriever
 from src.knowledge_graph.extract.factory import RelationExtractorFactory
 
-# Importar las estrategias RE registra sus decoradores en RelationExtractorFactory
-# (mrebel es el default del CLI; el service por defecto sigue siendo
-# coocurrencia-oracional, sin LLM).
+# Importar la estrategia RE registra su decorador en RelationExtractorFactory
+# (nli-zero-shot es el default del CLI; el service por defecto sigue siendo
+# coocurrencia-oracional, puramente simbólico).
 import src.knowledge_graph.extract.nli_relation_strategy  # noqa: F401
-import src.knowledge_graph.extract.mrebel_relation_strategy  # noqa: F401
+from src.knowledge_graph.re_cli_options import agregar_opciones_re, kwargs_re
 from src.knowledge_graph.retrieval.fusion import (
     CombMNZFusionStrategy,
     CombSUMFusionStrategy,
@@ -178,12 +179,11 @@ def recuperar_hibrido(
 def _construir_canales(args) -> Tuple[List[Retriever], GraphIndexAdapter]:
     """Carga los canales vectoriales y el canal de grafo (con la RE elegida)."""
     canales = _cargar_canales_vectoriales(Path(args.encoders_dir))
-    kwargs_re = {"num_beams": args.num_beams} if args.re == "mrebel" else {}
     canal_grafo = _cargar_canal_grafo(
         Path(args.encoders_dir),
         args.limite_grafo,
         Path(args.cargar_grafo) if args.cargar_grafo else None,
-        RelationExtractorFactory.create(args.re, **kwargs_re),
+        RelationExtractorFactory.create(args.re, **kwargs_re(args)),
     )
     return canales, canal_grafo
 
@@ -213,18 +213,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--encoders-dir", default="base_vectorial", help="Directorio de artefactos de entrega")
     parser.add_argument("--cargar-grafo", default=None, help="Ruta de un grafo.graphml ya exportado (evita reconstruir)")
     parser.add_argument("--limite-grafo", type=int, default=None, help="Máximo de chunks para el grafo (default: todos)")
-    parser.add_argument(
-        "--re",
-        default="mrebel",
-        choices=["coocurrencia-oracional", "nli-zero-shot", "mrebel"],
-        help="Estrategia RE para construir el grafo (default: mrebel, seq2seq multilingüe)",
-    )
-    parser.add_argument(
-        "--num-beams",
-        type=int,
-        default=3,
-        help="Beam search de mREBEL (1 = greedy, ~3x más rápido en CPU; solo aplica con --re mrebel)",
-    )
+    agregar_opciones_re(parser)
     parser.add_argument("--k-search", type=int, default=50, help="Top-k por canal antes de fusionar")
     parser.add_argument("--k0", type=int, default=60, help="Constante RRF (solo fusion rrf)")
     parser.add_argument("--fusion", default="rrf", choices=sorted(FUSIONES), help="Estrategia de fusión")

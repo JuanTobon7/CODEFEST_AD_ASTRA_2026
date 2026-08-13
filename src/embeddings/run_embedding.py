@@ -17,7 +17,7 @@ import argparse
 import hashlib
 import logging
 import sys
-from typing import Dict, List, Optional
+from typing import Dict, Iterator, List, Optional
 
 # Importar el paquete de estrategias concretas registra cada una vía
 # @EncoderFactory.register (efecto secundario necesario antes de crear()).
@@ -92,27 +92,29 @@ def _log_fenomenos(titulo: str, conteo: Dict[int, int]) -> None:
 
 def _construir_registros_embedding(
     resultado: EncoderRunResult, chunks_por_id: dict, chunk_id_to_hash: dict
-) -> List[EmbeddingRecord]:
+) -> Iterator[EmbeddingRecord]:
     """Combina el ``EncoderRunResult`` (vectores) con la metadata del ``Chunk``
     (Sección 5.1) para persistir cada vector como fuente de verdad en Mongo.
+
+    Es un GENERADOR a propósito: con el corpus completo son cientos de miles
+    de registros y materializarlos en una lista cuesta ~1 GB de más, encima
+    del array de vectores que ya ocupa otro tanto. ``save_many`` los consume
+    por lotes, así que en ningún momento existen todos a la vez.
     """
-    registros = []
     for posicion, chunk_id in enumerate(resultado.chunk_ids):
         chunk = chunks_por_id[chunk_id]
-        registros.append(
-            EmbeddingRecord(
-                chunk_id=chunk_id,
-                doc_id=chunk.doc_id,
-                fenomeno=chunk.fenomeno,
-                formato=chunk.formato,
-                encoder_name=resultado.encoder_name,
-                model_id=resultado.model_id,
-                embedding_dim=resultado.embedding_dim,
-                vector=resultado.vectors[posicion],
-                hash_texto=chunk_id_to_hash[chunk_id],
-            )
+        yield EmbeddingRecord(
+            chunk_id=chunk_id,
+            doc_id=chunk.doc_id,
+            fenomeno=chunk.fenomeno,
+            formato=chunk.formato,
+            encoder_name=resultado.encoder_name,
+            model_id=resultado.model_id,
+            embedding_dim=resultado.embedding_dim,
+            # Fila del array, no una copia: el vector no se duplica.
+            vector=resultado.vectors[posicion],
+            hash_texto=chunk_id_to_hash[chunk_id],
         )
-    return registros
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -201,7 +203,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 _por_fenomeno(chunks_a_codificar),
             )
 
-            resultado = orquestador.run(chunks_a_codificar)[nombre]
+            resultado = orquestador.run_encoder(nombre, chunks_a_codificar)
             if resultado.chunks_excluidos:
                 _log_fenomenos(
                     f"encoder '{nombre}' | chunks EXCLUIDOS por límite de tokens",

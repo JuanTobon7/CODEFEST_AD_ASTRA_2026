@@ -7,8 +7,9 @@ from __future__ import annotations
 import hashlib
 import time
 from contextlib import contextmanager
+from itertools import islice
 from pathlib import Path
-from typing import Iterator, List, Sequence, TypeVar
+from typing import Iterable, Iterator, List, Sequence, TypeVar
 
 T = TypeVar("T")
 
@@ -27,6 +28,22 @@ def en_lotes(items: Sequence[T], tam: int = 2000) -> Iterator[List[T]]:
     """
     for inicio in range(0, len(items), tam):
         yield list(items[inicio : inicio + tam])
+
+
+def en_lotes_iter(items: Iterable[T], tam: int = 2000) -> Iterator[List[T]]:
+    """Igual que :func:`en_lotes` pero consumiendo un iterable perezoso.
+
+    :func:`en_lotes` necesita una ``Sequence`` (usa ``len`` y rebanadas), lo
+    que obliga a materializar la colección entera. Esta variante permite
+    procesar por lotes un generador —p. ej. cientos de miles de vectores de
+    embedding— sin que la lista completa llegue a existir en memoria.
+    """
+    iterador = iter(items)
+    while True:
+        lote = list(islice(iterador, tam))
+        if not lote:
+            return
+        yield lote
 
 
 def extension_de(path: Path) -> str:

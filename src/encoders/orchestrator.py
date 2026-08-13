@@ -71,6 +71,25 @@ class EncoderOrchestrator:
             resultados[estrategia.name] = self._run_una_estrategia(estrategia, chunks)
         return resultados
 
+    def run_encoder(self, encoder_name: str, chunks: List[Chunk]) -> EncoderRunResult:
+        """Corre SOLO la estrategia ``encoder_name`` sobre ``chunks``.
+
+        Cada encoder tiene su propia caché, así que el lote pendiente es
+        distinto para cada uno: pedir el lote de un encoder a :meth:`run`
+        codificaría también con los demás y tiraría el resultado (N veces el
+        trabajo con N encoders activos).
+
+        Raises:
+            ValueError: si ``encoder_name`` no está entre las estrategias.
+        """
+        for estrategia in self.strategies:
+            if estrategia.name == encoder_name:
+                return self._run_una_estrategia(estrategia, chunks)
+        raise ValueError(
+            f"Encoder '{encoder_name}' no registrado en el orquestador. "
+            f"Disponibles: {', '.join(e.name for e in self.strategies)}"
+        )
+
     def _run_una_estrategia(self, estrategia: EncoderStrategy, chunks: List[Chunk]) -> EncoderRunResult:
         textos, chunk_ids, excluidos = self._preparar_lote(estrategia, chunks)
         if not textos:

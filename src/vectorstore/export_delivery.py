@@ -29,7 +29,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Union
+from typing import Dict, List, Tuple, Union
 
 import faiss
 import numpy as np
@@ -71,22 +71,50 @@ class DeliveryExporter:
         return [c.chunk_id for c in sorted(chunks, key=lambda c: (c.doc_id, c.posicion))]
 
     @staticmethod
-    def _chunk_ids_faltantes(chunk_ids_totales: List[str], registros_por_id: Dict[str, EmbeddingRecord]) -> List[str]:
+    def _chunk_ids_faltantes(chunk_ids_totales: List[str], presentes) -> List[str]:
         """``chunk_id`` activos que no tienen embedding calculado para este encoder."""
-        return [cid for cid in chunk_ids_totales if cid not in registros_por_id]
+        return [cid for cid in chunk_ids_totales if cid not in presentes]
 
-    @staticmethod
-    def _validar_dimension_uniforme(
-        registros_por_id: Dict[str, EmbeddingRecord], embedding_dim: int, encoder_name: str
-    ) -> None:
-        """Aborta si algún vector no coincide con ``embedding_dim`` (mezcla de modelos)."""
-        for chunk_id, registro in registros_por_id.items():
-            dim_real = int(np.asarray(registro.vector).shape[-1])
+    def _matriz_de_vectores(
+        self, encoder_name: str, fila_de: Dict[str, int], embedding_dim: int
+    ) -> Tuple[np.ndarray, set]:
+        """Vuelca los vectores del encoder en una matriz preasignada.
+
+        Se llena fila a fila desde el cursor en streaming, en vez de acumular
+        los ``EmbeddingRecord`` y hacer ``np.vstack`` al final: con el corpus
+        completo, esa vía mantiene viva a la vez la lista de registros, sus
+        vectores y la copia del ``vstack`` (varios GB). Aquí solo existe la
+        matriz destino, y cada registro se descarta en cuanto se copia su fila.
+
+        Args:
+            fila_de: ``chunk_id`` -> índice de fila que le corresponde en el
+                orden determinístico de entrega.
+            embedding_dim: dimensión esperada; un vector que no la cumpla
+                aborta la exportación (mezcla accidental de modelos).
+
+        Returns:
+            ``(matriz, chunk_ids_presentes)``.
+
+        Raises:
+            ExportError: si algún vector no tiene ``embedding_dim``.
+        """
+        matriz = np.zeros((len(fila_de), embedding_dim), dtype=np.float32)
+        presentes: set = set()
+        for registro in self.vector_repository.find_by_encoder(encoder_name):
+            fila = fila_de.get(registro.chunk_id)
+            if fila is None:
+                continue  # vector de un chunk que ya no está activo
+            vector = np.asarray(registro.vector, dtype=np.float32)
+            dim_real = int(vector.shape[-1])
             if dim_real != embedding_dim:
                 raise ExportError(
-                    f"Encoder '{encoder_name}': vector de '{chunk_id}' tiene dim={dim_real}, "
-                    f"se esperaba {embedding_dim}. Posible mezcla accidental de modelos."
+                    f"Encoder '{encoder_name}': vector de '{registro.chunk_id}' tiene "
+                    f"dim={dim_real}, se esperaba {embedding_dim}. "
+                    "Posible mezcla accidental de modelos."
                 )
+            matriz[fila] = vector
+            presentes.add(registro.chunk_id)
+        return matriz, presentes
 
     @staticmethod
     def _checksum_archivo(ruta: Path) -> str:
@@ -121,9 +149,10 @@ class DeliveryExporter:
                 ``False``), o si hay vectores con dimensión inconsistente.
         """
         chunk_ids_totales = self._ordenar_chunk_ids(chunks_activos)
-        registros_por_id = {r.chunk_id: r for r in self.vector_repository.find_by_encoder(encoder_name)}
+        fila_de = {chunk_id: fila for fila, chunk_id in enumerate(chunk_ids_totales)}
+        vectores, presentes = self._matriz_de_vectores(encoder_name, fila_de, embedding_dim)
 
-        faltantes = self._chunk_ids_faltantes(chunk_ids_totales, registros_por_id)
+        faltantes = self._chunk_ids_faltantes(chunk_ids_totales, presentes)
         if faltantes:
             if not permitir_faltantes:
                 raise ExportError(
@@ -134,12 +163,11 @@ class DeliveryExporter:
                 "Encoder '%s': %d chunk(s) sin embedding se omiten del índice (modo parcial)",
                 encoder_name, len(faltantes),
             )
-            chunk_ids_totales = [cid for cid in chunk_ids_totales if cid in registros_por_id]
-        self._validar_dimension_uniforme(registros_por_id, embedding_dim, encoder_name)
-
-        vectores = np.vstack(
-            [np.asarray(registros_por_id[cid].vector, dtype=np.float32) for cid in chunk_ids_totales]
-        )
+            # Compacta: las filas de los chunks sin vector se descartan y el
+            # resto conserva su orden relativo, que es el orden de entrega.
+            filas_validas = [fila_de[cid] for cid in chunk_ids_totales if cid in presentes]
+            vectores = vectores[filas_validas]
+            chunk_ids_totales = [cid for cid in chunk_ids_totales if cid in presentes]
 
         indice = index_strategy.build(embedding_dim, config)
         index_strategy.train_if_needed(indice, vectores)

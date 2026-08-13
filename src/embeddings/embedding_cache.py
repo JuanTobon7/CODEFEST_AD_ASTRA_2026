@@ -103,18 +103,26 @@ class EmbeddingCache:
         ]
 
     def marcar_procesados(self, encoder_name: str, chunk_id_to_hash: Dict[str, str]) -> None:
-        """Registra que ``encoder_name`` ya codificó estos chunks (por ``hash_texto``)."""
+        """Registra que ``encoder_name`` ya codificó estos chunks (por ``hash_texto``).
+
+        Escribe por lotes, igual que :meth:`pendientes` lee por lotes: con el
+        corpus completo son cientos de miles de operaciones y construirlas
+        todas de una vez es un pico de memoria innecesario.
+        """
         if not chunk_id_to_hash:
             return
         self.connect()
         coleccion = self._cliente[self._db_name][self._collection_name]  # type: ignore[union-attr]
-        operaciones = [
-            UpdateOne(
-                {"chunk_id": chunk_id, "encoder_name": encoder_name},
-                {"$set": {"hash_texto": hash_texto}},
-                upsert=True,
+        for lote in en_lotes(list(chunk_id_to_hash.items())):
+            coleccion.bulk_write(
+                [
+                    UpdateOne(
+                        {"chunk_id": chunk_id, "encoder_name": encoder_name},
+                        {"$set": {"hash_texto": hash_texto}},
+                        upsert=True,
+                    )
+                    for chunk_id, hash_texto in lote
+                ],
+                ordered=False,
             )
-            for chunk_id, hash_texto in chunk_id_to_hash.items()
-        ]
-        coleccion.bulk_write(operaciones, ordered=False)
         logger.info("Cache actualizado: %d chunks marcados para '%s'", len(chunk_id_to_hash), encoder_name)
