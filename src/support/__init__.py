@@ -2,7 +2,15 @@
 Capa de soporte (tokenización, segmentación de oraciones, utilidades).
 """
 
+from src.support.ocr import configurar_tesseract, idiomas_ocr, tesseract_disponible
 from src.support.sentence_splitter import SentenceSplitter
 from src.support.tokenizer import Tokenizer, TokenizerFactory
 
-__all__ = ["SentenceSplitter", "Tokenizer", "TokenizerFactory"]
+__all__ = [
+    "SentenceSplitter",
+    "Tokenizer",
+    "TokenizerFactory",
+    "configurar_tesseract",
+    "idiomas_ocr",
+    "tesseract_disponible",
+]

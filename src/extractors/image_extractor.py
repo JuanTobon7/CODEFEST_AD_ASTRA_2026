@@ -2,19 +2,27 @@
 Extractor de imágenes con OCR (pytesseract o easyocr).
 
 El texto OCR de cada imagen es una unidad estructural única.
-Si el idioma de OCR no se especifica, se detecta automáticamente probando
-los idiomas disponibles (``spa+eng`` por defecto).
+Si el idioma de OCR no se especifica, se detecta automáticamente entre los
+idiomas realmente instalados en Tesseract (``spa+eng+por`` por preferencia).
+
+La localización del binario de Tesseract vive en :mod:`src.support.ocr`, que lo
+busca fuera del ``PATH`` (el instalador de Windows no lo añade).
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 from src.extractors.base import BaseExtractor, ExtractorError
 from src.extractors.factory import register_extractor
 from src.models.extracted_document import ExtractedDocument, Formato, Section
+from src.support.ocr import (
+    configurar_tesseract,
+    idiomas_easyocr,
+    idiomas_ocr,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +41,10 @@ class ImageExtractor(BaseExtractor):
                 se intenta autodetección.
         """
         self.ocr_language = ocr_language
+        # Motor e idiomas realmente empleados; se resuelven durante el OCR y se
+        # guardan como metadata para poder auditar la calidad del texto.
+        self._motor_usado: str = "ninguno"
+        self._idiomas_usados: str = ""
 
     def extract(self, filepath: Path) -> ExtractedDocument:
         """Extrae el texto de la imagen mediante OCR."""
@@ -47,56 +59,47 @@ class ImageExtractor(BaseExtractor):
             formato=Formato.IMAGE,
             fenomeno=1,
             secciones=[Section(texto=texto, orden=0, splittable=True)],
-            metadata={"ocr_language": self.ocr_language or "auto"},
+            metadata={
+                "ocr": True,
+                "ocr_engine": self._motor_usado,
+                "ocr_language": self._idiomas_usados or self.ocr_language or "auto",
+            },
         )
 
     def _ocr(self, filepath: Path) -> str:
-        """Intenta pytesseract y cae a easyocr si no está disponible."""
-        # 1) pytesseract: requiere el BINARIO de Tesseract en el sistema.
-        try:
-            import pytesseract  # type: ignore
-            from PIL import Image  # type: ignore
+        """Intenta Tesseract y cae a easyocr si no está disponible."""
+        # 1) Tesseract: se localiza el binario antes de usar pytesseract, ya que
+        # el instalador de Windows no lo deja en el PATH.
+        if configurar_tesseract() is not None:
+            try:
+                import pytesseract  # type: ignore
+                from PIL import Image  # type: ignore
 
-            idiomas = self.ocr_language or self._detectar_idiomas_pytesseract()
-            texto = pytesseract.image_to_string(Image.open(filepath), lang=idiomas)
-            return texto
-        except ImportError:
-            pass  # pytesseract no instalado: probar easyocr
-        except Exception as exc:
-            if type(exc).__name__ == "TesseractNotFoundError":
-                raise ExtractorError(
-                    f"OCR: pytesseract instalado pero falta el binario de Tesseract "
-                    f"(imagen: {filepath.name}). Instálalo, p. ej. "
-                    f"winget install UB-Mannheim.TesseractOCR"
-                ) from exc
-            logger.warning("pytesseract falló para %s: %s", filepath.name, exc)
+                idiomas = self.ocr_language or idiomas_ocr()
+                with Image.open(filepath) as imagen:
+                    texto = pytesseract.image_to_string(imagen, lang=idiomas)
+                self._motor_usado, self._idiomas_usados = "tesseract", idiomas
+                return texto
+            except ImportError:
+                pass  # falta Pillow: probar easyocr
+            except Exception as exc:
+                logger.warning("Tesseract falló para %s: %s", filepath.name, exc)
 
         # 2) easyocr: sin binario externo (pero pesado, requiere torch).
         try:
             import easyocr  # type: ignore
 
-            idiomas = self.ocr_language or "es,en,pt"
-            lector = easyocr.Reader([l.strip() for l in idiomas.split("+") if l.strip()], gpu=False, verbose=False)
+            idiomas = idiomas_easyocr(self.ocr_language)
+            lector = easyocr.Reader(idiomas, gpu=False, verbose=False)
             resultados = lector.readtext(str(filepath), detail=0, paragraph=True)
+            self._motor_usado, self._idiomas_usados = "easyocr", "+".join(idiomas)
             return "\n".join(str(r) for r in resultados)
         except ImportError as exc:
             raise ExtractorError(
-                f"OCR no disponible (imagen: {filepath.name}): instala easyocr "
-                f"o el binario de Tesseract (winget install UB-Mannheim.TesseractOCR)"
+                f"OCR no disponible (imagen: {filepath.name}): no se encontró el "
+                f"binario de Tesseract ni el paquete easyocr. Instala Tesseract "
+                f"(winget install UB-Mannheim.TesseractOCR), indica su ruta con la "
+                f"variable TESSERACT_CMD, o instala easyocr."
             ) from exc
         except Exception as exc:
             raise ExtractorError(f"easyocr falló para {filepath.name}: {exc}") from exc
-
-    @staticmethod
-    def _detectar_idiomas_pytesseract() -> str:
-        """Idiomas disponibles para pytesseract (prioridad es/en/pt)."""
-        try:
-            import pytesseract  # type: ignore
-
-            disponibles = set(pytesseract.get_languages(config=""))
-        except Exception:
-            disponibles = set()
-        preferidos = [l for l in ("spa", "eng", "por") if l in disponibles]
-        if preferidos:
-            return "+".join(preferidos)
-        return "eng"
