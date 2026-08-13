@@ -1,7 +1,7 @@
-"""Tests de la RE neuronal NLI zero-shot (``nli-zero-shot``).
+"""Tests de la RE por clasificación NLI (``nli-zero-shot``).
 
 Sin red ni modelos reales: el tokenizer y el modelo se inyectan como fakes.
-El tokenizer fake codifica el ÍNDICE de la hipótesis en ``input_ids[i, 0]`` y
+El tokenizer fake codifica el ÍNDICE de la secuencia en ``input_ids[i, 0]`` y
 el modelo fake devuelve logits de una tabla por índice → el test controla
 qué RelationType "entraña" el texto sin tocar HuggingFace.
 
@@ -18,7 +18,13 @@ import torch
 from src.knowledge_graph.extract.base import RelationExtractor, normalizar_id_entidad
 from src.knowledge_graph.extract.factory import RelationExtractorFactory
 from src.knowledge_graph.extract.nli_backend import NLIInferenceEngine
-from src.knowledge_graph.extract.nli_config import PLANTILLAS_HIPOTESIS
+from src.knowledge_graph.extract.nli_config import (
+    FICHA_MODELO_NLI,
+    LICENCIA_MODELO_NLI,
+    PLANTILLAS_HIPOTESIS,
+    VARIANTES_PLANTILLA_DEFAULT,
+    plantillas_activas,
+)
 from src.knowledge_graph.extract.nli_relation_strategy import NLIRelationExtractor
 from src.knowledge_graph.models import Entity, EntityType, RelationType
 
@@ -68,24 +74,34 @@ class _FakeModelo:
         return SimpleNamespace(logits=torch.tensor(filas, dtype=torch.float))
 
 
-def _indices_de(tipo_buscado: RelationType) -> list:
-    """Índices de las hipótesis de un RelationType (mismo orden que la clase)."""
-    candidatas = [
-        (tipo, _p)
-        for tipo, plantillas in PLANTILLAS_HIPOTESIS.items()
-        for _p in plantillas
-    ]
-    return [i for i, (tipo, _p) in enumerate(candidatas) if tipo == tipo_buscado]
+#: Plantillas efectivamente evaluadas por la estrategia, en su mismo orden.
+_PLANTILLAS_ACTIVAS = [
+    (tipo, plantilla)
+    for tipo, plantillas in plantillas_activas(VARIANTES_PLANTILLA_DEFAULT).items()
+    for plantilla in plantillas
+]
+_ANCHO = len(_PLANTILLAS_ACTIVAS)
+
+
+def _indices_de(tipo_buscado: RelationType, max_pares: int = 8) -> list:
+    """Índices GLOBALES de las hipótesis de un tipo dentro del lote.
+
+    La estrategia clasifica todos los pares de una oración en un solo lote:
+    el par ``p`` ocupa las posiciones ``p * ancho .. (p+1) * ancho``. Se
+    devuelven las posiciones del tipo buscado en los primeros ``max_pares``.
+    """
+    locales = [i for i, (tipo, _p) in enumerate(_PLANTILLAS_ACTIVAS) if tipo == tipo_buscado]
+    return [par * _ANCHO + i for par in range(max_pares) for i in locales]
 
 
 def _extractor(logits_por_indice=None, **kwargs):
     """Estrategia con fakes inyectados; devuelve (extractor, modelo_fake).
 
-    ``batch_size=64`` por defecto: las ~35 hipótesis de un par entran en un
-    solo forward y el índice global codificado por el tokenizer fake coincide
-    con la tabla de logits del modelo fake.
+    ``batch_size=512`` por defecto: todos los pares de la oración entran en un
+    solo forward, así que el índice global que codifica el tokenizer fake
+    coincide con la tabla de logits del modelo fake.
     """
-    kwargs.setdefault("batch_size", 64)
+    kwargs.setdefault("batch_size", 512)
     modelo = _FakeModelo(logits_por_indice or {})
     extractor = NLIRelationExtractor(
         tokenizer=_FakeTokenizador(), modelo=modelo, **kwargs
@@ -112,6 +128,67 @@ def test_implementa_relacion_extractor():
 def test_default_sigue_siendo_simbólico():
     """El service no cambia su default: coocurrencia-oracional sigue registrado."""
     assert "coocurrencia-oracional" in RelationExtractorFactory.list_available()
+
+
+def test_solo_hay_estrategias_re_con_licencia_permisiva():
+    """Regresión: mREBEL (CC BY-NC-SA y generativo) quedó fuera del proyecto."""
+    assert set(RelationExtractorFactory.list_available()) == {
+        "coocurrencia-oracional",
+        "nli-zero-shot",
+    }
+
+
+def test_modelo_declarado_es_mit_y_no_generativo():
+    """La ficha del checkpoint documenta el cumplimiento exigido por el reto."""
+    assert LICENCIA_MODELO_NLI == "MIT"
+    assert FICHA_MODELO_NLI["licencia"] == "MIT"
+    assert FICHA_MODELO_NLI["generativo"] == "no"
+    assert FICHA_MODELO_NLI["model_id"] == "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"
+
+
+# -- Presupuesto de inferencia ------------------------------------------------
+
+def test_plantillas_activas_recorta_variantes_por_tipo():
+    recortadas = plantillas_activas(1)
+    assert set(recortadas) == set(PLANTILLAS_HIPOTESIS)
+    assert all(len(v) == 1 for v in recortadas.values())
+    assert plantillas_activas(0) == PLANTILLAS_HIPOTESIS
+
+
+def test_max_pares_por_oracion_acota_el_numero_de_pares():
+    """Con 3 entidades hay 6 pares dirigidos; el tope deja pasar solo 2."""
+    logits = {i: [0.05, 0.05, 0.9] for i in _indices_de(RelationType.COOPERA_CON)}
+    extractor, _ = _extractor(logits, max_pares_por_oracion=2)
+    entidades = [_ent("ESA"), _ent("NASA"), _ent("SpaceX")]
+    relaciones = extractor.extraer_relaciones(
+        "La ESA coopera con la NASA y con SpaceX.", entidades
+    )
+    assert len(relaciones) == 2
+
+
+def test_max_pares_por_chunk_acota_el_gasto_entre_oraciones():
+    """El presupuesto del chunk se agota en la primera oración."""
+    logits = {i: [0.05, 0.05, 0.9] for i in _indices_de(RelationType.COOPERA_CON)}
+    extractor, _ = _extractor(logits, max_pares_por_oracion=2, max_pares_por_chunk=2)
+    entidades = [_ent("ESA"), _ent("NASA"), _ent("SpaceX"), _ent("Boeing")]
+    relaciones = extractor.extraer_relaciones(
+        "La ESA coopera con la NASA. SpaceX coopera con Boeing.", entidades
+    )
+    assert len(relaciones) == 2
+    assert {r.sujeto for r in relaciones} | {r.objeto for r in relaciones} == {"esa", "nasa"}
+
+
+def test_num_hipotesis_por_par_refleja_las_variantes():
+    extractor, _ = _extractor(variantes_plantilla=1)
+    assert extractor.num_hipotesis_por_par == len(PLANTILLAS_HIPOTESIS)
+
+
+def test_un_solo_forward_para_todos_los_pares_de_la_oracion():
+    """Los pares de una oración se clasifican en un lote, no uno por uno."""
+    extractor, modelo = _extractor()
+    entidades = [_ent("ESA"), _ent("NASA"), _ent("SpaceX")]
+    extractor.extraer_relaciones("La ESA coopera con la NASA y con SpaceX.", entidades)
+    assert modelo.llamadas == 1
 
 
 # -- Clasificación ------------------------------------------------------------

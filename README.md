@@ -183,12 +183,18 @@ db.chunks.getIndexes()   # uq_chunk_id (único), idx_doc_id, idx_fenomeno
 
 ---
 
-### Repositorio JSON de chunks
+### `metadata.json`: la fuente de verdad de los chunks
 
-La ingesta usa por defecto `JsonChunkRepository`. Guarda todos los fragmentos
-en `data/chunks.json` como una lista JSON, con upsert idempotente por
-`chunk_id` y escritura atomica. Cada objeto contiene exactamente los campos
-obligatorios de la Tabla 1:
+**Todas las etapas posteriores (embeddings, índice FAISS y grafo de
+conocimiento) leen exactamente los mismos fragmentos, y salen de un único
+archivo: `metadata.json`.** Es una lista JSON con upsert idempotente por
+`chunk_id`, escritura atómica y orden determinista `(doc_id, posicion,
+chunk_id)`, así que dos corridas producen el mismo artefacto.
+
+Cada objeto lleva los ocho campos **obligatorios** de la Tabla 1 más los
+**recomendados** (los primeros son el contrato de entrega; los segundos los
+consumen el post-filtrado de recuperación —`idioma`, `fecha_publicacion`— y la
+caché de embeddings —`hash_texto`—):
 
 ```json
 {
@@ -199,13 +205,41 @@ obligatorios de la Tabla 1:
   "fenomeno": 1,
   "posicion": 0,
   "num_tokens": 123,
-  "texto": "Texto original del fragmento."
+  "texto": "Texto original del fragmento.",
+  "idioma": "es",
+  "titulo_documento": "Informe técnico",
+  "fecha_publicacion": null,
+  "chunking_strategy": "paragraph_overlap",
+  "seccion": "Introducción",
+  "overlap_con": null,
+  "hash_texto": "9c2799c2...",
+  "created_at": "2026-08-10T23:19:24+00:00"
 }
 ```
 
+Se genera de dos maneras equivalentes:
+
+```bash
+# a) Directamente al ingerir (CHUNK_REPOSITORY=json, el modo por defecto)
+python -m src.run_ingestion --corpus CORPUS_CODEFEST_AD_ASTRA_2026 --fenomenos data/fenomenos.json
+
+# b) Exportando unos chunks que ya estaban en MongoDB (sin re-ingerir el corpus)
+python -m src.persistence.run_export_metadata
+```
+
+La exportación lee y escribe en *streaming* (`MongoChunkRepository.iter_all` →
+`JsonChunkRepository.write_all`): el corpus completo son ~356 000 fragmentos y
+~450 MB de JSON, y nunca se materializan a la vez el texto crudo del archivo y
+su versión parseada. La lectura (`iter_chunks`) también es incremental.
+
 Configura otra ruta con `CHUNKS_JSON_PATH`. Para seguir usando MongoDB como
-repositorio de chunks, define `CHUNK_REPOSITORY=mongo`. La etapa de embeddings
-y la exportacion FAISS leen la misma configuracion de chunks.
+repositorio de chunks, define `CHUNK_REPOSITORY=mongo`. `metadata.json` está en
+`.gitignore` (~450 MB): es un artefacto regenerable, no se versiona.
+
+> No confundir `metadata.json` (fuente de verdad, todos los chunks) con
+> `base_vectorial/encoder_<n>/metadata.jsonl` (artefacto de entrega de la
+> Sección 5.3, una línea por vector del índice y solo los 8 campos
+> obligatorios).
 
 ## 7. Tests
 
@@ -243,7 +277,7 @@ y `ChunkValidator` (duros y blandos).
 
 ## 9. Codificación semántica (embeddings) — Sección 4
 
-Toma los chunks ya persistidos en MongoDB y genera sus vectores de embedding
+Toma los chunks de `metadata.json` (§6) y genera sus vectores de embedding
 con uno o varios encoders **HuggingFace** intercambiables, vía el patrón
 **Strategy**. Solo se admiten arquitecturas **encoder** (BERT y derivados);
 las arquitecturas decoder (GPT, LLaMA, Gemini, Claude...) están prohibidas
@@ -335,15 +369,22 @@ no reevalúan la regla.
 ### 9.4 Configuración (`.env`)
 
 ```
+CHUNK_REPOSITORY=json
+CHUNKS_JSON_PATH=metadata.json
 ACTIVE_ENCODERS=bert-multilingual,e5-multilingual-base,e5-multilingual-small
 EMBEDDING_BATCH_SIZE=32
 # Overrides opcionales por encoder (VRAM limitada): bert-large=8,e5-multilingual-small=64
 EMBEDDING_BATCH_SIZE_OVERRIDES=
 EMBEDDING_DEVICE=auto
 EMBEDDING_OUTPUT_DIR=base_vectorial
-MONGO_COLLECTION_CHUNKS=chunks
 MONGO_COLLECTION_EMBEDDINGS_CACHE=embeddings_cache
 ```
+
+Los chunks vienen de `metadata.json`; MongoDB solo guarda los **vectores**
+(`embeddings`) y la **caché** (`embeddings_cache`). Cada encoder tiene su
+propia caché, así que `EncoderOrchestrator.run_encoder(nombre, lote)` codifica
+únicamente con el encoder cuyo lote pendiente se está procesando (usar
+`run()` codificaría con los N encoders y descartaría N-1 resultados).
 
 ### 9.5 Ejecución
 
@@ -456,6 +497,157 @@ python -m src.embeddings.run_embedding --limite 500       # calcula y persiste v
 python -m src.vectorstore.run_export_delivery              # exporta index.faiss + metadata.jsonl por encoder
 ```
 
-No implementa todavía (próximo prompt): el módulo de recuperación (consulta
-→ vector de query → búsqueda en FAISS → fusión multi-encoder vía
-RRF/CombSUM/CombMNZ → agregación a nivel documento, Sección 8).
+---
+
+## 11. Grafo de conocimiento — Sección 7
+
+Construye G = (E, R, T) con T ⊆ E × R × E a partir de los MISMOS chunks que
+alimentan el índice FAISS, y lo expone como un canal más de recuperación que
+se fusiona con los canales vectoriales (Sección 8.5). Cada tripleta conserva
+`doc_id`/`chunk_id` de origen, así que toda arista es auditable contra el
+texto que la sustenta.
+
+```
+src/knowledge_graph/
+ ├── models.py                    # Entity, Relation, Tripleta, ScoredChunk
+ ├── extract/                     # NER (nodos) + RE (aristas) + Factory
+ ├── graph/                       # GraphBuilder, GraphQuery, GraphML
+ ├── retrieval/                   # GraphIndexAdapter + fusión RRF/CombSUM/CombMNZ
+ ├── service.py                   # KnowledgeGraphService (Facade)
+ ├── re_cli_options.py            # opciones RE compartidas por los 3 CLI
+ └── run_build_graph.py           # CLI: exporta grafo.graphml
+tests/test_knowledge_graph/
+```
+
+### 11.1 Modelos usados, licencias y no-generatividad
+
+El reto exige licencias permisivas (Apache-2.0 / MIT) y prohíbe modelos
+generativos en indexación y recuperación. Ambas etapas cumplen:
+
+| Etapa | Estrategia | Modelo | Licencia | ¿Generativo? |
+|---|---|---|---|---|
+| **Nodos (NER)** | `regex-gazetteer` | ninguno — gazetteer del dominio + patrón de nombres propios, código del proyecto | n/a (sin checkpoint de terceros) | No: determinista y simbólico |
+| **Aristas (RE)** | `nli-zero-shot` *(default)* | `MoritzLaurer/mDeBERTa-v3-base-mnli-xnli` | **MIT** | **No**: encoder DeBERTa-v3 + cabecera de clasificación de 3 etiquetas |
+| **Aristas (RE)** | `coocurrencia-oracional` | ninguno — co-ocurrencia oracional + patrones verbales | n/a | No: determinista y simbólico |
+
+Por qué el clasificador NLI **no** es generativo: no tiene decoder ni cabecera
+de modelado de lenguaje. Su salida son tres logits
+(contradicción / neutral / entailment) por par (premisa, hipótesis); no
+produce ni un solo token de texto. Los sujetos y objetos salen siempre del NER
+sobre el texto real, y el tipo de relación se ELIGE de un vocabulario cerrado
+(`RelationType`): el modelo nunca inventa entidades ni relaciones nuevas.
+
+> **Modelo retirado**: hasta esta versión el default era
+> `Babelscape/mrebel-large` (mREBEL). Se eliminó del proyecto por incumplir
+> las dos reglas: su licencia es **CC BY-NC-SA 4.0** (no comercial, no es
+> Apache-2.0/MIT) y es un **seq2seq generativo** (mBART) que produce las
+> tripletas token a token. Un test de regresión
+> (`test_solo_hay_estrategias_re_con_licencia_permisiva`) impide que vuelva a
+> registrarse una estrategia fuera de la lista permitida.
+
+### 11.2 Cómo se construyen nodos y aristas
+
+1. **NER** (nodos): sobre cada chunk, matching por spans del gazetteer
+   (ganan las entidades de más palabras) + nombres propios multi-palabra. El
+   id del nodo es canónico y normalizado, y un mapa de **alias es↔en** hace
+   que `space debris` y `basura espacial` resuelvan al MISMO nodo — clave
+   porque el corpus es mayoritariamente EN y las consultas del reto son ES.
+2. **Candidateo** (simbólico, barato): pares de entidades que co-ocurren en
+   la misma oración.
+3. **Tipado** (el modelo): la oración es la premisa y
+   `"<sujeto> <verbo> <objeto>"` la hipótesis, una por `RelationType`. Gana
+   el tipo con mayor probabilidad de entailment; por debajo de
+   `UMBRAL_TIPADO` la arista queda como `COOCURRENCIA`.
+4. **Tripletas + GraphML**: `(sujeto, relación, objeto, doc_id, chunk_id,
+   evidencia, confianza)` → `grafo.graphml`, cargable con NetworkX.
+
+### 11.3 Presupuesto de inferencia
+
+El canal cuesta `pares_dirigidos × tipos × variantes` forwards, así que el
+candidateo es simbólico y el modelo solo tipa candidatos, con topes explícitos
+y caché por (oración, par) — el corpus repite mucho boilerplate. Todos los
+pares de una oración se clasifican en **un solo forward**.
+
+| Opción | Default | Efecto |
+|---|---|---|
+| `--variantes-plantilla` | 1 (ES canónica) | Formulaciones por tipo; `0` = todas |
+| `--max-pares-oracion` | 4 | Tope de pares por oración |
+| `--max-pares-chunk` | 4 | Tope de pares por chunk |
+| `--re-batch-size` | 64 | Lote del forward |
+| `--sin-fp16` | (fp16 activo) | Media precisión en GPU: ~2× y mitad de VRAM |
+
+Los defaults están calibrados para **cubrir el corpus completo** (~356 000
+chunks) en un tiempo razonable: 10 hipótesis por par dirigido y como mucho 4
+pares por chunk. La decisión de diseño es que, para recuperación, pesa más la
+cobertura (que todo chunk tenga nodos y aristas) que la riqueza del tipado —
+una arista `COOCURRENCIA` recupera el chunk igual que una tipada. Con más
+cómputo disponible, `--variantes-plantilla 2 --max-pares-chunk 12` da un
+tipado bastante más rico a ~6× el coste.
+
+El recorte de pares es determinista (orden de detección de las entidades), así
+que dos corridas producen el mismo grafo.
+
+**Mide antes de comprometer horas de GPU.** El coste depende del hardware y de
+cuántas entidades traiga cada texto, así que no lo estimes a ojo:
+
+```bash
+python -m src.knowledge_graph.run_build_graph --estimar 200
+# -> Muestra: 200 chunks en 41.3s (207 ms/chunk) -> 512 entidades, 733 tripletas.
+#    Proyección a 356453 chunks: ~20.5 h en este hardware.
+```
+
+Cronometra esos N chunks reales con la MISMA configuración con la que se
+construiría el grafo y extrapola. Es una cota superior razonable: la caché
+acierta más cuanto mayor es el corpus.
+
+### 11.4 Ejecución
+
+```bash
+# 0. ¿Cuánto va a costar en esta máquina?
+python -m src.knowledge_graph.run_build_graph --estimar 200
+
+# 1. Construir y exportar el grafo (requiere los artefactos de la Sección 5)
+python -m src.knowledge_graph.run_build_graph --output grafo.graphml
+
+# Sin GPU o sin tiempo: RE simbólica, minutos en vez de horas, sin modelo
+python -m src.knowledge_graph.run_build_graph --re coocurrencia-oracional
+
+# 2. Recuperación híbrida FAISS + grafo, con la traza del camino por el grafo
+python -m src.knowledge_graph.run_hybrid_retrieval --queries consultas.jsonl \
+    --k 10 --cargar-grafo grafo.graphml --output-caminos logs/caminos_grafo.json
+
+# 3. Entrega con el grafo como canal adicional (esquema Sección 9.3.1)
+python -m src.knowledge_graph.run_generador_hibrido --cargar-grafo grafo.graphml
+```
+
+> Pasa siempre `--cargar-grafo grafo.graphml` en los pasos 2 y 3: sin él,
+> ambos CLI **reconstruyen el grafo desde cero** (y con él el coste del
+> modelo) en cada invocación.
+
+`KnowledgeGraphService.resumen()` incluye la ficha del modelo de relaciones
+(`model_id`, arquitectura, licencia, `generativo: no`) para que la auditoría
+de licencias quede trazada en el log de cada construcción.
+
+---
+
+## 12. Orden de ejecución de extremo a extremo
+
+```bash
+# 1. Chunks -> metadata.json (fuente de verdad)
+python -m src.run_ingestion --corpus CORPUS_CODEFEST_AD_ASTRA_2026 --fenomenos data/fenomenos.json
+#    (o, si los chunks ya estaban en MongoDB: python -m src.persistence.run_export_metadata)
+
+# 2. Embeddings de esos chunks -> MongoDB (colección embeddings)
+python -m src.embeddings.run_embedding
+
+# 3. Índices de entrega por encoder -> base_vectorial/encoder_<n>/
+python -m src.vectorstore.run_export_delivery
+
+# 4. Grafo de conocimiento -> grafo.graphml
+python -m src.knowledge_graph.run_build_graph --output grafo.graphml
+
+# 5. Resultados (Sección 9.3.1)
+python generador.py                                        # solo FAISS
+python -m src.knowledge_graph.run_generador_hibrido \
+    --cargar-grafo grafo.graphml                           # FAISS + grafo
+```

@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import re
 
-from typing import Dict, List, Optional
+from typing import Dict, Iterator, List, Optional
 
 from pymongo import ASCENDING, IndexModel, MongoClient, UpdateOne
 from pymongo.errors import PyMongoError
@@ -128,6 +128,38 @@ class MongoChunkRepository(ChunkRepository):
         if limite:
             cursor = cursor.limit(limite)
         return [Chunk.model_validate(d) for d in cursor]
+
+    def iter_all(self, batch_size: int = 1000) -> Iterator[Chunk]:
+        """Itera TODOS los chunks en orden ``(doc_id, posicion)``, en streaming.
+
+        Pensado para volcar el corpus completo a otro repositorio sin
+        materializarlo en memoria (cientos de miles de fragmentos). El orden
+        es el mismo determinístico que usa la exportación de entrega, y se
+        apoya en un índice compuesto para no ordenar en RAM.
+        """
+        self.connect()
+        coleccion = self._cliente[self._db_name][self._collection_name]  # type: ignore[union-attr]
+        coleccion.create_indexes(
+            [
+                IndexModel(
+                    [("doc_id", ASCENDING), ("posicion", ASCENDING)],
+                    name="idx_doc_id_posicion",
+                )
+            ]
+        )
+        cursor = (
+            coleccion.find({}, {"_id": 0})
+            .sort([("doc_id", ASCENDING), ("posicion", ASCENDING)])
+            .batch_size(batch_size)
+        )
+        for documento in cursor:
+            yield Chunk.model_validate(documento)
+
+    def drop_collection(self) -> None:
+        """Elimina por completo la colección de chunks (índices incluidos)."""
+        self.connect()
+        self._cliente[self._db_name].drop_collection(self._collection_name)  # type: ignore[union-attr]
+        logger.info("Colección '%s.%s' eliminada", self._db_name, self._collection_name)
 
     @staticmethod
     def _cuotas_por_fenomeno(limite: int, n_fenomenos: int = 3) -> Dict[int, int]:

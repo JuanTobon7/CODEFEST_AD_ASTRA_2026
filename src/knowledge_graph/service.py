@@ -143,11 +143,21 @@ class KnowledgeGraphService:
         return self._entity_extractor
 
     def resumen(self) -> dict:
-        """Resumen del estado del servicio (informe técnico)."""
-        return {
+        """Resumen del estado del servicio (informe técnico).
+
+        Incluye la ficha del modelo de relaciones cuando la estrategia activa
+        usa uno, para que la auditoría de licencias del reto (permisiva y no
+        generativa) quede trazada en el log de cada construcción del grafo.
+        """
+        resumen = {
             "ner": self._entity_extractor.name,
             "re": self._relation_extractor.name,
             "entidades": self._grafo.num_entidades if self._grafo else 0,
             "tripletas": self._grafo.num_tripletas if self._grafo else 0,
             "repositorio": type(self._repositorio).__name__,
         }
+        if self._relation_extractor.name == "nli-zero-shot":
+            from src.knowledge_graph.extract.nli_config import FICHA_MODELO_NLI
+
+            resumen["modelo_re"] = dict(FICHA_MODELO_NLI)
+        return resumen

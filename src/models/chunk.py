@@ -71,6 +71,22 @@ class Chunk(BaseModel):
         "texto",
     )
 
+    # Campos "deseables" de la Tabla 1. Se conservan en ``metadata.json`` (la
+    # fuente de verdad de los chunks) porque el post-filtrado de recuperación
+    # los consume (``idioma``, ``fecha_publicacion``) y porque ``hash_texto``
+    # es la clave de la caché de embeddings. El artefacto de entrega
+    # (``metadata.jsonl``) sigue llevando solo los obligatorios.
+    CAMPOS_METADATA_RECOMENDADA: ClassVar[tuple[str, ...]] = (
+        "idioma",
+        "titulo_documento",
+        "fecha_publicacion",
+        "chunking_strategy",
+        "seccion",
+        "overlap_con",
+        "hash_texto",
+        "created_at",
+    )
+
     @field_validator("doc_id", "chunk_id", "fuente")
     @classmethod
     def _campos_no_vacios(cls, valor: str, info) -> str:
@@ -95,3 +111,17 @@ class Chunk(BaseModel):
         obligatorios de la Tabla 1 y no incluye campos internos de ejecucion.
         """
         return self.model_dump(include=set(self.CAMPOS_METADATA_OBLIGATORIA))
+
+    @property
+    def como_dict_metadata(self) -> dict:
+        """Metadata completa de la Tabla 1: obligatoria + recomendada.
+
+        Es lo que persiste ``metadata.json`` cuando actua como fuente de
+        verdad de los chunks (sustituye a MongoDB): no pierde los campos
+        deseables, pero sigue excluyendo la auditoria interna
+        (``validation_warnings``, ``encoders_procesados``).
+        """
+        campos = set(self.CAMPOS_METADATA_OBLIGATORIA) | set(
+            self.CAMPOS_METADATA_RECOMENDADA
+        )
+        return self.model_dump(include=campos)

@@ -8,6 +8,12 @@ repo/
 *.zip
 data/corpus/
 data/chunks.json
+# Fuente de verdad de los chunks (~450 MB, ~85 MB comprimido). No se versiona:
+# se regenera con `python -m src.persistence.run_export_metadata` o se comparte
+# fuera de git. JsonChunkRepository lee el .gz de forma transparente, así que
+# basta con dejarlo en la raíz para que el pipeline funcione.
+metadata.json
+metadata.json.gz
 base_vectorial/
 *.npy
 *.faiss

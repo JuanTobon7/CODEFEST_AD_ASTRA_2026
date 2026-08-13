@@ -14,25 +14,33 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import Dict, Iterator, List, Optional
+from typing import Dict, Iterable, Iterator, List, Optional
 
 import numpy as np
 from bson import Binary
 from pymongo import ASCENDING, IndexModel, MongoClient, UpdateOne
 from pymongo.errors import PyMongoError
 
-from src.support.utils import en_lotes
+from src.support.utils import en_lotes, en_lotes_iter
 from src.vectorstore.models import EmbeddingRecord
 
 logger = logging.getLogger(__name__)
+
+#: Vectores por ``bulk_write``. Con 768 dims float32 son ~3 KB por operación,
+#: así que 1000 acota el pico a unos pocos MB por lote.
+_LOTE_ESCRITURA = 1000
 
 
 class VectorRepository(ABC):
     """Contrato de persistencia de vectores por ``(chunk_id, encoder_name)``."""
 
     @abstractmethod
-    def save_many(self, records: List[EmbeddingRecord]) -> None:
-        """Upsert idempotente por ``(chunk_id, encoder_name)``."""
+    def save_many(self, records: Iterable[EmbeddingRecord]) -> None:
+        """Upsert idempotente por ``(chunk_id, encoder_name)``.
+
+        Acepta un iterable perezoso: con un corpus grande, materializar todos
+        los vectores de un encoder a la vez cuesta gigabytes.
+        """
 
     @abstractmethod
     def find_by_encoder(self, encoder_name: str, batch_size: int = 500) -> Iterator[EmbeddingRecord]:
@@ -164,31 +172,42 @@ class MongoVectorRepository(VectorRepository):
             updated_at=doc.get("updated_at"),
         )
 
-    def save_many(self, records: List[EmbeddingRecord]) -> None:
-        """Upsert idempotente por ``(chunk_id, encoder_name)``."""
-        if not records:
-            return
+    def save_many(self, records: Iterable[EmbeddingRecord]) -> None:
+        """Upsert idempotente por ``(chunk_id, encoder_name)``, por lotes.
+
+        Escribe en bloques de :data:`_LOTE_ESCRITURA`: cada operación lleva
+        una COPIA del vector empaquetado (~3 KB), así que materializar las
+        operaciones de un corpus completo de golpe costaría gigabytes. Con
+        lotes, el pico de memoria es constante e independiente del tamaño del
+        corpus.
+        """
         coleccion = self._coleccion()
-        operaciones = [
-            UpdateOne(
-                {"chunk_id": r.chunk_id, "encoder_name": r.encoder_name},
-                {
-                    "$set": self._a_documento(r),
-                    "$setOnInsert": {"created_at": datetime.now(timezone.utc).isoformat()},
-                },
-                upsert=True,
-            )
-            for r in records
-        ]
-        try:
-            resultado = coleccion.bulk_write(operaciones, ordered=False)
+        total = insertados = actualizados = 0
+        for lote in en_lotes_iter(records, _LOTE_ESCRITURA):
+            operaciones = [
+                UpdateOne(
+                    {"chunk_id": r.chunk_id, "encoder_name": r.encoder_name},
+                    {
+                        "$set": self._a_documento(r),
+                        "$setOnInsert": {"created_at": datetime.now(timezone.utc).isoformat()},
+                    },
+                    upsert=True,
+                )
+                for r in lote
+            ]
+            try:
+                resultado = coleccion.bulk_write(operaciones, ordered=False)
+            except PyMongoError as exc:
+                logger.error("Fallo al persistir vectores (tras %d): %s", total, exc)
+                raise
+            total += len(lote)
+            insertados += resultado.upserted_count
+            actualizados += resultado.modified_count
+        if total:
             logger.info(
                 "Vectores persistidos: %d (insertados=%d, actualizados=%d)",
-                len(records), resultado.upserted_count, resultado.modified_count,
+                total, insertados, actualizados,
             )
-        except PyMongoError as exc:
-            logger.error("Fallo al persistir vectores: %s", exc)
-            raise
 
     def find_by_encoder(self, encoder_name: str, batch_size: int = 500) -> Iterator[EmbeddingRecord]:
         """Cursor en streaming: no carga todo el corpus en memoria."""
